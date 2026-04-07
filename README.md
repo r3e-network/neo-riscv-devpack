@@ -134,9 +134,16 @@ public class HelloWorldContract : SmartContract
 }
 ```
 
+### Dual-Target Compilation (NeoVM + RISC-V)
+
+This devpack supports compiling C# smart contracts to **both** NeoVM bytecode and RISC-V/PolkaVM binaries:
+
+- **NeoVM** (default): Traditional Neo N3 virtual machine
+- **RISC-V**: RISC-V based PolkaVM for next-generation execution
+
 ### Compiling a Smart Contract
 
-The NEO C# compiler (nccs) translates your C# smart contract into NeoVM bytecode, which can then be deployed to the NEO blockchain. There are several ways to compile your contract:
+The NEO C# compiler (nccs) translates your C# smart contract into NeoVM bytecode (default) or RISC-V binary. There are several ways to compile your contract:
 
 #### Basic Compilation
 
@@ -204,6 +211,27 @@ The NEO C# compiler supports the following options:
 | `--nullable` | Sets the nullable context options (Disable, Enable, Annotations, Warnings) |
 | `--checked` | Enables overflow checking for arithmetic operations |
 | `--address-version` | Sets the address version for script hash calculations |
+| `--target` | Compilation target: `NeoVM` (default) or `RiscV` |
+
+#### RISC-V Compilation
+
+To compile for RISC-V instead of NeoVM:
+
+```shell
+# Compile for RISC-V target
+dotnet run --project src/Neo.Compiler.CSharp/Neo.Compiler.CSharp.csproj -- \
+    path/to/your/contract.csproj \
+    --target RiscV
+
+# The compiler will generate:
+# - Rust source code in `bin/sc/riscv/`
+# - Cargo.toml for building
+# - `.polkavm` binary (if cargo and polkatool are installed)
+```
+
+**Requirements for RISC-V compilation:**
+- [Rust](https://rust-lang.org/) with nightly toolchain
+- [polkatool](https://github.com/koute/polkavm) for linking
 
 ### Testing a Smart Contract
 
