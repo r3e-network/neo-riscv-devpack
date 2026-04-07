@@ -1,0 +1,89 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// ListTest.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+using System.Numerics;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Neo.Json;
+using Neo.SmartContract.Testing;
+
+namespace Neo.SmartContract.Framework.UnitTests
+{
+    [TestClass]
+    public class ListTest : DebugAndTestBase<Contract_List>
+    {
+        [TestMethod]
+        public void TestCount()
+        {
+            Assert.AreEqual(4, Contract.TestCount(4));
+            AssertGasConsumed(2036100);
+        }
+
+        [TestMethod]
+        public void TestAdd()
+        {
+            var item = Contract.TestAdd(4);
+            var json = ParseJson(item);
+
+            Assert.IsTrue(json is JArray);
+            var jarray = (JArray)json;
+            for (int i = 0; i < 4; i++)
+            {
+                Assert.IsTrue(jarray[i] is JNumber);
+                Assert.AreEqual(i, jarray[i]!.AsNumber());
+            }
+        }
+
+        [TestMethod]
+        public void TestRemoveAt()
+        {
+            var item = Contract.TestRemoveAt(5, 2);
+            AssertGasConsumed(3389940);
+            var json = ParseJson(item);
+
+            Assert.IsTrue(json is JArray);
+            var jarray = (JArray)json;
+            for (int i = 0; i < 4; i++)
+            {
+                Assert.IsTrue(jarray[i] is JNumber);
+                Assert.AreEqual(i < 2 ? i : i + 1, jarray[i]!.AsNumber());
+            }
+        }
+
+        [TestMethod]
+        public void TestClear()
+        {
+            var item = Contract.TestClear(4);
+            AssertGasConsumed(3142470);
+            var json = ParseJson(item);
+
+            Assert.IsTrue(json is JArray);
+            var jarray = (JArray)json;
+            Assert.AreEqual(0, jarray.Count);
+        }
+
+        [TestMethod]
+        public void TestArrayConvert()
+        {
+            var array = Contract.TestArrayConvert(4)!;
+            AssertGasConsumed(2035980);
+            Assert.AreEqual(4, array.Count);
+            for (int i = 0; i < 4; i++)
+            {
+                Assert.AreEqual(new BigInteger(i), array[i]);
+            }
+        }
+
+        static JToken ParseJson(string? json)
+        {
+            return JToken.Parse(json!)!;
+        }
+    }
+}

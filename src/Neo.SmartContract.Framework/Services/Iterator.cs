@@ -1,0 +1,66 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// Iterator.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+using Neo.SmartContract.Framework.Attributes;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Neo.SmartContract.Framework.Services
+{
+    public class Iterator : IApiInterface, IEnumerable
+    {
+        /// <summary>
+        /// Moves the iterator to the next element.
+        /// </summary>
+        [Syscall("System.Iterator.Next")]
+        public extern bool Next();
+
+        /// <summary>
+        /// The current value of the iterator.
+        /// It called must be after the `Next` method is called.
+        /// </summary>
+        public extern object Value
+        {
+            [Syscall("System.Iterator.Value")]
+            get;
+        }
+
+        /// <summary>
+        /// Just for code compatibility. Don't use this method.
+        /// </summary>
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public class Iterator<T> : Iterator, IEnumerable<T>
+    {
+        /// <summary>
+        /// The current value of the iterator.
+        /// It called must be after the `Next` method is called.
+        /// </summary>
+        public extern new T Value
+        {
+            [Syscall("System.Iterator.Value")]
+            get;
+        }
+
+        /// <summary>
+        /// Just for code compatibility. Don't use this method.
+        /// </summary>
+        IEnumerator<T> IEnumerable<T>.GetEnumerator()
+        {
+            throw new NotImplementedException();
+        }
+    }
+}

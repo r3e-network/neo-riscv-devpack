@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Title>Neo.Disassembler.CSharp</Title>
+        <LangVersion>latest</LangVersion>
+        <AssemblyTitle>Neo.Disassembler.CSharp</AssemblyTitle>
+        <AssemblyName>Neo.Disassembler.CSharp</AssemblyName>
+        <RootNamespace>Neo.Disassembler.CSharp</RootNamespace>
+        <PackageId>Neo.Disassembler.CSharp</PackageId>
+        <PackageTags>NEO;Blockchain;Smart Contract</PackageTags>
+        <Description>Disassembler for NEO smart contract.</Description>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <IncludeContentInPack>true</IncludeContentInPack>
+        <ContentTargetFolders>content</ContentTargetFolders>
+        <Nullable>enable</Nullable>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="README.md" Pack="true" PackagePath="" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\..\..\neo-riscv-core\src\Neo\Neo.csproj" />
+    </ItemGroup>
+
+</Project>

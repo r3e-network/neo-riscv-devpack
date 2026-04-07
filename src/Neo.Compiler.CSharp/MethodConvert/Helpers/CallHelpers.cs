@@ -1,0 +1,668 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// CallHelpers.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+extern alias scfx;
+
+using Akka.Util.Internal;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Neo.IO;
+using Neo.SmartContract;
+using Neo.VM;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
+
+namespace Neo.Compiler;
+
+internal partial class MethodConvert
+{
+    private readonly Stack<Dictionary<IParameterSymbol, List<CompilationContext.OutSyncTarget>>> _outStaticFieldSyncScopes = new();
+
+    /// <summary>
+    /// Creates an instruction to call an interop method using the given descriptor.
+    /// </summary>
+    /// <param name="descriptor">The interop descriptor representing the method to call.</param>
+    /// <returns>The instruction to perform the interop call.</returns>
+    private Instruction CallInteropMethod(InteropDescriptor descriptor)
+        => AddInstruction(new Instruction
+        {
+            OpCode = OpCode.SYSCALL,
+            Operand = BitConverter.GetBytes(descriptor)
+        });
+
+    /// <summary>
+    /// Creates an instruction to call a method in another smart contract identified by its hash.
+    /// </summary>
+    /// <param name="hash">The hash of the contract containing the method.</param>
+    /// <param name="method">The name of the method to call.</param>
+    /// <param name="parametersCount">The number of parameters the method takes.</param>
+    /// <param name="hasReturnValue">Whether the method returns a value.</param>
+    /// <param name="callFlags">The call flags to use for the method call.</param>
+    /// <returns>The instruction to perform the contract method call.</returns>
+    private Instruction CallContractMethod(UInt160 hash, string method, ushort parametersCount, bool hasReturnValue, CallFlags callFlags = CallFlags.All)
+    {
+        ushort token = _context.AddMethodToken(hash, method, parametersCount, hasReturnValue, callFlags);
+        return AddInstruction(new Instruction
+        {
+            OpCode = OpCode.CALLT,
+            Operand = BitConverter.GetBytes(token)
+        });
+    }
+
+    /// <summary>
+    /// Creates instructions to call an instance method, handling the instance on the stack and preparing the arguments.
+    /// </summary>
+    /// <param name="model">The semantic model of the code.</param>
+    /// <param name="symbol">The method symbol representing the method to call.</param>
+    /// <param name="instanceOnStack">Whether the instance is on the stack.</param>
+    /// <param name="arguments">The list of arguments for the method call.</param>
+    private void CallInstanceMethod(SemanticModel model, IMethodSymbol symbol, bool instanceOnStack, IReadOnlyList<ArgumentSyntax> arguments)
+    {
+        PushOutStaticFieldSyncScope();
+        try
+        {
+            if (TryProcessSpecialMethods(model, symbol, null, arguments))
+            {
+                EmitOutStaticFieldSync(symbol.Parameters);
+                return;
+            }
+
+            var (convert, methodCallingConvention) = GetMethodConvertAndCallingConvention(model, symbol);
+
+            if (symbol.MethodKind == MethodKind.Constructor
+                && convert != null
+                && convert.Instructions.Count == 1
+                && convert.Instructions[0].OpCode == OpCode.RET
+                && !symbol.IsExtern)
+                return;  // Do not call meaningless contructors
+            if (NeedInstanceConstructor(symbol) && convert != null && convert.Instructions.Count >= 2)
+            {
+                Instruction initslot = convert.Instructions[0];
+                Instruction ret = convert.Instructions[1];
+                if (initslot.OpCode == OpCode.INITSLOT && initslot.Operand?[0] == 0 && initslot.Operand[1] == 1
+                 && ret.OpCode == OpCode.RET)
+                    return;  // Do not call meaningless contructors
+            }
+
+            HandleConstructorDuplication(instanceOnStack, methodCallingConvention, symbol);
+
+            PrepareArgumentsForMethod(model, symbol, arguments, methodCallingConvention);
+
+            HandleInstanceOnStack(symbol, instanceOnStack, methodCallingConvention);
+
+            EmitMethodCall(convert, symbol);
+        }
+        finally
+        {
+            PopOutStaticFieldSyncScope();
+        }
+    }
+
+    /// <summary>
+    /// Creates instructions to call a method with an optional instance expression, handling both instance and static methods.
+    /// </summary>
+    /// <param name="model">The semantic model of the code.</param>
+    /// <param name="symbol">The method symbol representing the method to call.</param>
+    /// <param name="instanceExpression">The optional instance expression for the method call.</param>
+    /// <param name="arguments">The list of arguments for the method call.</param>
+    private void CallMethodWithInstanceExpression(SemanticModel model, IMethodSymbol symbol, ExpressionSyntax? instanceExpression, params SyntaxNode[] arguments)
+    {
+        PushOutStaticFieldSyncScope();
+        try
+        {
+            if (TryProcessSpecialMethods(model, symbol, instanceExpression, arguments))
+            {
+                EmitOutStaticFieldSync(symbol.Parameters);
+                return;
+            }
+
+            var (convert, methodCallingConvention) = GetMethodConvertAndCallingConvention(model, symbol, instanceExpression);
+
+            if (symbol.MethodKind == MethodKind.Constructor
+                && convert != null
+                && convert.Instructions.Count == 1
+                && convert.Instructions[0].OpCode == OpCode.RET
+                && !symbol.IsExtern)
+                return;  // Do not call meaningless contructors
+            if (NeedInstanceConstructor(symbol) && convert != null && convert.Instructions.Count >= 2)
+            {
+                Instruction initslot = convert.Instructions[0];
+                Instruction ret = convert.Instructions[1];
+                if (initslot.OpCode == OpCode.INITSLOT && initslot.Operand?[0] == 0 && initslot.Operand[1] == 1
+                 && ret.OpCode == OpCode.RET)
+                    return;  // Do not call meaningless contructors
+            }
+
+            HandleInstanceExpression(model, symbol, instanceExpression, methodCallingConvention, beforeArguments: true);
+
+            PrepareArgumentsForMethod(model, symbol, arguments, methodCallingConvention);
+
+            HandleInstanceExpression(model, symbol, instanceExpression, methodCallingConvention, beforeArguments: false);
+
+            EmitMethodCall(convert, symbol);
+        }
+        finally
+        {
+            PopOutStaticFieldSyncScope();
+        }
+    }
+
+    /// <summary>
+    /// Creates instructions to call a method with a specified calling convention.
+    /// </summary>
+    /// <param name="model">The semantic model of the code.</param>
+    /// <param name="symbol">The method symbol representing the method to call.</param>
+    /// <param name="callingConvention">The calling convention to use for the method call.</param>
+    private void CallMethodWithConvention(SemanticModel model, IMethodSymbol symbol, CallingConvention callingConvention = CallingConvention.Cdecl)
+    {
+        PushOutStaticFieldSyncScope();
+        try
+        {
+            if (TryProcessSystemMethods(model, symbol, null, null) || TryProcessInlineMethods(model, symbol, null))
+            {
+                EmitOutStaticFieldSync(symbol.Parameters);
+                return;
+            }
+
+            var (convert, methodCallingConvention) = GetMethodConvertAndCallingConvention(model, symbol);
+
+            int pc = symbol.Parameters.Length + (!NeedInstanceConstructor(symbol) ? 0 : 1);
+            if (pc > 1 && methodCallingConvention != callingConvention)
+                ReverseStackItems(pc);
+
+            if (convert is null)
+                CallVirtual(symbol);
+            else
+                EmitCall(convert);
+
+            EmitOutStaticFieldSync(symbol.Parameters);
+        }
+        finally
+        {
+            PopOutStaticFieldSyncScope();
+        }
+    }
+
+    private bool TryProcessSpecialMethods(SemanticModel model, IMethodSymbol symbol, ExpressionSyntax? instanceExpression, IReadOnlyList<SyntaxNode> arguments)
+    {
+        return TryProcessSystemMethods(model, symbol, instanceExpression, arguments) ||
+               TryProcessInlineMethods(model, symbol, arguments);
+    }
+
+    private void PushOutStaticFieldSyncScope()
+    {
+        _outStaticFieldSyncScopes.Push(new Dictionary<IParameterSymbol, List<CompilationContext.OutSyncTarget>>(SymbolEqualityComparer.Default));
+    }
+
+    private void PopOutStaticFieldSyncScope()
+    {
+        if (_outStaticFieldSyncScopes.Count == 0)
+            throw new CompilationException(DiagnosticId.SyntaxNotSupported, "Internal compiler error: out-parameter synchronization scope underflow.");
+        _outStaticFieldSyncScopes.Pop();
+    }
+
+    private Dictionary<IParameterSymbol, List<CompilationContext.OutSyncTarget>> GetCurrentOutStaticFieldSyncScope()
+    {
+        if (_outStaticFieldSyncScopes.Count == 0)
+            throw new CompilationException(DiagnosticId.SyntaxNotSupported, "Internal compiler error: missing out-parameter synchronization scope.");
+        return _outStaticFieldSyncScopes.Peek();
+    }
+
+    private void AddOutStaticFieldSyncTarget(IParameterSymbol parameter, CompilationContext.OutSyncTarget target)
+    {
+        var scope = GetCurrentOutStaticFieldSyncScope();
+        if (!scope.TryGetValue(parameter, out var syncTargets))
+        {
+            syncTargets = new List<CompilationContext.OutSyncTarget>();
+            scope[parameter] = syncTargets;
+        }
+
+        bool exists = syncTargets.Any(existing =>
+            SymbolEqualityComparer.Default.Equals(existing.Symbol, target.Symbol) &&
+            existing.InstanceSlot == target.InstanceSlot);
+        if (!exists)
+            syncTargets.Add(target);
+    }
+
+    private void EmitOutStaticFieldSync(IEnumerable<IParameterSymbol> parameters)
+    {
+        var scope = GetCurrentOutStaticFieldSyncScope();
+        foreach (var parameter in parameters)
+        {
+            if (!scope.TryGetValue(parameter, out var syncTargets))
+                continue;
+
+            foreach (var sync in syncTargets)
+            {
+                LdArgSlot(parameter);
+                switch (sync.Symbol)
+                {
+                    case IParameterSymbol param:
+                        StArgSlot(param);
+                        break;
+                    case ILocalSymbol local:
+                        StLocSlot(local);
+                        break;
+                    case IFieldSymbol fieldSync:
+                        StoreOutFieldValue(fieldSync, sync.InstanceSlot);
+                        break;
+                    default:
+                        throw new CompilationException(DiagnosticId.SyntaxNotSupported, $"Unsupported symbol type '{sync.Symbol.GetType().Name}' for parameter synchronization. Only parameters, local variables, and fields are supported.");
+                }
+            }
+        }
+    }
+
+    private static Dictionary<IParameterSymbol, ArgumentSyntax> MapArgumentsToParameters(SemanticModel model, IMethodSymbol symbol, IEnumerable<SyntaxNode> arguments)
+    {
+        Dictionary<IParameterSymbol, ArgumentSyntax> map = new(SymbolEqualityComparer.Default);
+        int positionalIndex = 0;
+        foreach (SyntaxNode node in arguments)
+        {
+            if (node is not ArgumentSyntax argument) continue;
+
+            IParameterSymbol? targetParameter;
+            if (argument.NameColon is null)
+            {
+                targetParameter = symbol.Parameters.ElementAtOrDefault(positionalIndex++);
+            }
+            else
+            {
+                string parameterName = argument.NameColon.Name.Identifier.ValueText;
+                targetParameter = symbol.Parameters.FirstOrDefault(p => p.Name == parameterName);
+            }
+
+            if (targetParameter is null) continue;
+            if (!map.ContainsKey(targetParameter))
+                map[targetParameter] = argument;
+        }
+        return map;
+    }
+
+    private void ProcessByRefArgument(SemanticModel model, IMethodSymbol methodSymbol, IParameterSymbol parameter, ArgumentSyntax argument, bool captureOnly = false)
+    {
+        bool isRef = parameter.RefKind == RefKind.Ref;
+        bool isOut = parameter.RefKind == RefKind.Out;
+        if (!isRef && !isOut)
+            throw new CompilationException(DiagnosticId.SyntaxNotSupported, $"Parameter '{parameter.Name}' is not by-ref.");
+
+        SyntaxKind expectedKeyword = isRef ? SyntaxKind.RefKeyword : SyntaxKind.OutKeyword;
+        if (!argument.RefKindKeyword.IsKind(expectedKeyword))
+            throw new CompilationException(DiagnosticId.SyntaxNotSupported, $"Argument for parameter '{parameter.Name}' must use the '{expectedKeyword.ToString().ToLowerInvariant()}' keyword.");
+
+        switch (argument.Expression)
+        {
+            case DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }:
+                if (!isOut)
+                    throw CompilationException.UnsupportedSyntax(argument, $"ref parameters cannot use declaration expressions. Use an existing variable instead.");
+                ProcessByRefDeclaration(model, methodSymbol, parameter, designation, captureOnly);
+                break;
+            case IdentifierNameSyntax identifierName:
+                ProcessByRefIdentifier(model, parameter, identifierName, isRef, captureOnly);
+                break;
+            case MemberAccessExpressionSyntax memberAccess:
+                ProcessByRefMemberAccess(model, parameter, memberAccess, isRef, captureOnly);
+                break;
+            default:
+                throw CompilationException.UnsupportedSyntax(argument, $"Unsupported by-ref argument syntax '{argument.GetType().Name}'. Use 'out var variable', 'out existingVariable', or 'ref existingVariable'.");
+        }
+    }
+
+    private void ProcessByRefDeclaration(SemanticModel model, IMethodSymbol methodSymbol, IParameterSymbol parameter, SingleVariableDesignationSyntax designation, bool captureOnly)
+    {
+        var local = (ILocalSymbol)model.GetDeclaredSymbol(designation)!;
+        ProcessOutSymbol(parameter, local);
+        if (captureOnly)
+            return;
+        PushDefault(local.Type);
+        AddInstruction(OpCode.DUP);
+        StLocSlot(local); // initialize the local variable with default value
+    }
+
+    private void ProcessByRefIdentifier(SemanticModel model, IParameterSymbol parameter, IdentifierNameSyntax identifierName, bool isRef, bool captureOnly)
+    {
+        var symbol = model.GetSymbolInfo(identifierName).Symbol!;
+        switch (symbol)
+        {
+            case ILocalSymbol local:
+                if (captureOnly)
+                {
+                    ProcessOutSymbol(parameter, local);
+                    return;
+                }
+                if (isRef)
+                    LdLocSlot(local);
+                else
+                    PushDefault(local.Type);
+                ProcessOutSymbol(parameter, local);
+                AddInstruction(OpCode.DUP);
+                StLocSlot(local);
+                break;
+            case IParameterSymbol param:
+                if (captureOnly)
+                {
+                    ProcessOutSymbol(parameter, param);
+                    return;
+                }
+                if (isRef)
+                {
+                    LdArgSlot(param);
+                }
+                else
+                    PushDefault(param.Type);
+                ProcessOutSymbol(parameter, param);
+                AddInstruction(OpCode.DUP);
+                StArgSlot(param);
+                break;
+            case IFieldSymbol field:
+                ProcessByRefField(model, parameter, field, isRef, instanceExpression: null, identifierName, captureOnly);
+                break;
+            case IDiscardSymbol:
+                if (isRef)
+                    throw CompilationException.UnsupportedSyntax(identifierName, $"ref arguments cannot target discards.");
+                if (captureOnly)
+                {
+                    _context.GetOrAddCapturedStaticField(parameter);
+                    return;
+                }
+                ProcessOutSymbol(parameter, parameter);
+                PushDefault(parameter.Type);
+                AddInstruction(OpCode.DUP);
+                StArgSlot(parameter);
+                break;
+            default:
+                throw CompilationException.UnsupportedSyntax(identifierName, $"Unsupported identifier '{identifierName.Identifier.ValueText}' in out parameter. Use a variable name or discard ('_').");
+        }
+    }
+
+    private void ProcessByRefMemberAccess(SemanticModel model, IParameterSymbol parameter, MemberAccessExpressionSyntax memberAccess, bool isRef, bool captureOnly)
+    {
+        var symbol = model.GetSymbolInfo(memberAccess).Symbol!;
+        switch (symbol)
+        {
+            case IFieldSymbol field:
+                ProcessByRefField(model, parameter, field, isRef, memberAccess.Expression, memberAccess, captureOnly);
+                break;
+            default:
+                throw CompilationException.UnsupportedSyntax(memberAccess, $"Unsupported member access '{memberAccess}' in out parameter. Only fields are supported.");
+        }
+    }
+
+    private void ProcessByRefField(SemanticModel model, IParameterSymbol parameter, IFieldSymbol field, bool isRef, ExpressionSyntax? instanceExpression, SyntaxNode syntaxNode, bool captureOnly)
+    {
+        if (field.IsStatic)
+        {
+            byte fieldIndex = _context.AddStaticField(field);
+            if (captureOnly)
+            {
+                ProcessOutSymbol(parameter, field);
+                return;
+            }
+            if (isRef)
+                AccessSlot(OpCode.LDSFLD, fieldIndex);
+            else
+                PushDefault(field.Type);
+            ProcessOutSymbol(parameter, field);
+            AddInstruction(OpCode.DUP);
+            StArgSlot(parameter);
+            AddInstruction(OpCode.DUP);
+            AccessSlot(OpCode.STSFLD, fieldIndex);
+            return;
+        }
+
+        if (captureOnly)
+            return;
+
+        byte instanceSlot = _context.AddAnonymousStaticField();
+        if (instanceExpression is null)
+            AddInstruction(OpCode.LDARG0);
+        else
+            ConvertExpression(model, instanceExpression);
+        AccessSlot(OpCode.STSFLD, instanceSlot);
+
+        if (isRef)
+        {
+            AccessSlot(OpCode.LDSFLD, instanceSlot);
+            int fieldOffset = Array.IndexOf(field.ContainingType.GetFields(), field);
+            Push(fieldOffset);
+            AddInstruction(OpCode.PICKITEM);
+        }
+        else
+        {
+            PushDefault(field.Type);
+        }
+
+        ProcessOutSymbol(parameter, field, instanceSlot);
+        if (!_context.TryGetCapturedStaticField(field, out var fieldStorageIndex))
+            fieldStorageIndex = _context.GetOrAddCapturedStaticField(field);
+        AddInstruction(OpCode.DUP);
+        StArgSlot(parameter);
+        AddInstruction(OpCode.DUP);
+        AccessSlot(OpCode.STSFLD, fieldStorageIndex);
+    }
+
+    private void ProcessOutSymbol(IParameterSymbol parameter, ISymbol symbol, byte? instanceSlot = null)
+    {
+        if (symbol is IFieldSymbol fieldSymbol)
+        {
+            ProcessOutFieldSymbol(parameter, fieldSymbol, instanceSlot);
+            return;
+        }
+
+        if (parameter.RefKind == RefKind.Out)
+        {
+            if (!_context.TryGetCapturedStaticField(parameter, out var outParameterIndex))
+                outParameterIndex = _context.GetOrAddCapturedStaticField(parameter);
+            if (!_context.TryGetCapturedStaticField(symbol, out var outSymbolIndex))
+                outSymbolIndex = _context.GetOrAddCapturedStaticField(symbol);
+
+            // Out arguments do not need an inbound value from the target symbol. Keeping each target in
+            // its own captured slot prevents sequential out declarations from aliasing each other.
+            if (outParameterIndex != outSymbolIndex)
+                AddOutStaticFieldSyncTarget(parameter, new CompilationContext.OutSyncTarget(symbol));
+            return;
+        }
+
+        bool parameterCaptured = _context.TryGetCapturedStaticField(parameter, out var parameterIndex);
+        bool symbolCaptured = _context.TryGetCapturedStaticField(symbol, out var symbolIndex);
+
+        if (parameterCaptured && !symbolCaptured)
+        {
+            _context.AssociateCapturedStaticField(symbol, parameterIndex);
+        }
+        else if (!parameterCaptured && symbolCaptured)
+        {
+            _context.AssociateCapturedStaticField(parameter, symbolIndex);
+        }
+        else if (parameterCaptured && symbolCaptured && parameterIndex != symbolIndex)
+        {
+            AddOutStaticFieldSyncTarget(parameter, new CompilationContext.OutSyncTarget(symbol));
+        }
+        else if (!parameterCaptured && !symbolCaptured)
+        {
+            var index = _context.GetOrAddCapturedStaticField(symbol);
+            _context.AssociateCapturedStaticField(parameter, index);
+        }
+    }
+
+    private void ProcessOutFieldSymbol(IParameterSymbol parameter, IFieldSymbol field, byte? instanceSlot)
+    {
+        bool parameterCaptured = _context.TryGetCapturedStaticField(parameter, out var parameterIndex);
+        byte fieldIndex = field.IsStatic
+            ? _context.AddStaticField(field)
+            : _context.GetOrAddCapturedStaticField(field);
+
+        if (field.IsStatic)
+            _context.AssociateCapturedStaticField(field, fieldIndex);
+
+        if (!parameterCaptured)
+            parameterIndex = _context.GetOrAddCapturedStaticField(parameter);
+
+        bool requireSync = !field.IsStatic || parameterIndex != fieldIndex;
+        if (requireSync)
+        {
+            if (!field.IsStatic && instanceSlot is null)
+                throw new CompilationException(DiagnosticId.SyntaxNotSupported, $"Missing instance context for field '{field.Name}' in out parameter synchronization.");
+
+            AddOutStaticFieldSyncTarget(parameter, new CompilationContext.OutSyncTarget(field, instanceSlot));
+        }
+    }
+
+    private void StoreOutFieldValue(IFieldSymbol field, byte? instanceSlot)
+    {
+        if (field.IsStatic)
+        {
+            byte index = _context.AddStaticField(field);
+            AccessSlot(OpCode.STSFLD, index);
+            return;
+        }
+
+        if (instanceSlot is null)
+            throw new CompilationException(DiagnosticId.SyntaxNotSupported, $"Missing instance context for field '{field.Name}' in out argument synchronization.");
+
+        AccessSlot(OpCode.LDSFLD, instanceSlot.Value);
+        int fieldOffset = Array.IndexOf(field.ContainingType.GetFields(), field);
+        Push(fieldOffset);
+        AddInstruction(OpCode.ROT);
+        AddInstruction(OpCode.SETITEM);
+    }
+
+    private void HandleConstructorDuplication(bool instanceOnStack, CallingConvention methodCallingConvention, IMethodSymbol symbol)
+    {
+        if (instanceOnStack && methodCallingConvention != CallingConvention.Cdecl && symbol.MethodKind == MethodKind.Constructor)
+            AddInstruction(OpCode.DUP);
+    }
+
+    private void HandleInstanceExpression(SemanticModel model, IMethodSymbol symbol, ExpressionSyntax? instanceExpression,
+                                        CallingConvention methodCallingConvention, bool beforeArguments)
+    {
+        if (!NeedInstanceConstructor(symbol)) return;
+
+        bool shouldConvert = beforeArguments ? (methodCallingConvention != CallingConvention.Cdecl)
+                                             : (methodCallingConvention == CallingConvention.Cdecl);
+
+        if (shouldConvert)
+            ConvertInstanceExpression(model, instanceExpression);
+    }
+
+    private void EmitMethodCall(MethodConvert? convert, IMethodSymbol symbol)
+    {
+        if (convert is null)
+            CallVirtual(symbol);
+        else
+            EmitCall(convert);
+
+        EmitOutStaticFieldSync(symbol.Parameters);
+    }
+
+    // Helper method to get MethodConvert and CallingConvention
+    private (MethodConvert? convert, CallingConvention methodCallingConvention) GetMethodConvertAndCallingConvention(SemanticModel model, IMethodSymbol symbol)
+    {
+        if (symbol.IsVirtualMethod())
+            return (null, CallingConvention.Cdecl);
+
+        var convert = _context.ConvertMethod(model, symbol);
+        return (convert, convert._callingConvention);
+    }
+
+    // Helper method to handle instance on stack
+    private void HandleInstanceOnStack(IMethodSymbol symbol, bool instanceOnStack, CallingConvention methodCallingConvention)
+    {
+        if (!instanceOnStack || methodCallingConvention != CallingConvention.Cdecl)
+            return;
+
+        bool isConstructor = symbol.MethodKind == MethodKind.Constructor;
+
+        switch (symbol.Parameters.Length)
+        {
+            case 0:
+                if (isConstructor && NeedInstanceConstructor(symbol))
+                    AddInstruction(OpCode.DUP);
+                break;
+            case 1:
+                AddInstruction(isConstructor ? OpCode.OVER : OpCode.SWAP);
+                break;
+            default:
+                Push(symbol.Parameters.Length);
+                AddInstruction(isConstructor ? OpCode.PICK : OpCode.ROLL);
+                break;
+        }
+    }
+
+    // Helper method to get MethodConvert and CallingConvention for instance expression
+    private (MethodConvert? convert, CallingConvention methodCallingConvention) GetMethodConvertAndCallingConvention(SemanticModel model, IMethodSymbol symbol, ExpressionSyntax? instanceExpression)
+    {
+        if (symbol.IsVirtualMethod() && instanceExpression is not BaseExpressionSyntax)
+            return (null, CallingConvention.Cdecl);
+
+        var convert = symbol.ReducedFrom is null
+            ? _context.ConvertMethod(model, symbol)
+            : _context.ConvertMethod(model, symbol.ReducedFrom);
+        return (convert, convert._callingConvention);
+    }
+
+    // Helper method to convert instance expression
+    private void ConvertInstanceExpression(SemanticModel model, ExpressionSyntax? instanceExpression)
+    {
+        if (instanceExpression is null)
+            AddInstruction(OpCode.LDARG0);
+        else
+            ConvertExpression(model, instanceExpression);
+    }
+
+    private void EmitCall(MethodConvert target)
+    {
+        if (target._inline && !_context.Options.NoInline)
+            EmitInlineInstructions(target);
+        else
+            Jump(OpCode.CALL_L, target._startTarget);
+    }
+
+    // Helper method to emit inline instructions
+    private void EmitInlineInstructions(MethodConvert target)
+    {
+        for (int i = 0; i < target._instructions.Count - 1; i++)
+            AddInstruction(target._instructions[i].Clone());
+    }
+
+    private void CallVirtual(IMethodSymbol symbol)
+    {
+        if (symbol.ContainingType.TypeKind == TypeKind.Interface)
+            throw new CompilationException(symbol.ContainingType, DiagnosticId.InterfaceCall, "Interfaces are not supported.");
+
+        var members = symbol.ContainingType.GetAllMembers().Where(p => !p.IsStatic).ToArray();
+        var fields = members.OfType<IFieldSymbol>().ToArray();
+        var virtualMethods = members.OfType<IMethodSymbol>().Where(p => p.IsVirtualMethod()).ToArray();
+
+        int index = Array.IndexOf(virtualMethods, symbol);
+        if (index < 0)
+            throw new CompilationException(symbol, DiagnosticId.SyntaxNotSupported, $"Virtual method '{symbol.Name}' not found in type '{symbol.ContainingType.Name}'. Ensure the method is properly declared as virtual or override.");
+
+        AddInstruction(OpCode.DUP);
+        Push(fields.Length);
+        AddInstruction(OpCode.PICKITEM);
+        Push(index);
+        AddInstruction(OpCode.PICKITEM);
+        AddInstruction(OpCode.CALLA);
+    }
+
+    private void InvokeMethod(SemanticModel model, IMethodSymbol method)
+    {
+        var convert = _context.ConvertMethod(model, method);
+        Jump(OpCode.PUSHA, convert._startTarget);
+    }
+
+    private void InvokeMethod(MethodConvert convert)
+        => Jump(OpCode.PUSHA, convert._startTarget);
+}

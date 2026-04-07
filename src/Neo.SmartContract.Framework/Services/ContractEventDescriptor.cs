@@ -1,0 +1,22 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// ContractEventDescriptor.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+namespace Neo.SmartContract.Framework.Services
+{
+    /// <summary>
+    /// Represents an event in the ABI of a contract.
+    /// </summary>
+    public struct ContractEventDescriptor
+    {
+        public string Name;
+        public ContractParameterDefinition[] Parameters;
+    }
+}

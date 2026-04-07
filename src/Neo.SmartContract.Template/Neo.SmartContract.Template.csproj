@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Title>Neo.SmartContract.Template</Title>
+    <PackageType>Template</PackageType>
+    <PackageId>Neo.SmartContract.Template</PackageId>
+    <PackageTags>NEO;Blockchain;Smart Contract</PackageTags>
+    <Description>Templates to use when creating a smart contract for NEO.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="templates\**\*" />
+    <Compile Remove="**\*" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,74 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// ByteString.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+using Neo.SmartContract.Framework.Attributes;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace Neo.SmartContract.Framework
+{
+    public abstract class ByteString : IEnumerable<byte>
+    {
+        public static extern ByteString Empty { [OpCode(OpCode.PUSHDATA1, "00")] get; }
+
+        public extern byte this[int index]
+        {
+            [OpCode(OpCode.PICKITEM)]
+            get;
+        }
+
+        public extern int Length
+        {
+            [OpCode(OpCode.SIZE)]
+            get;
+        }
+
+        [Obsolete("ByteString enumeration is not supported in Neo smart contracts. Convert to byte[] first: foreach (var b in (byte[])byteString)", error: true)]
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        IEnumerator<byte> IEnumerable<byte>.GetEnumerator()
+        {
+            throw new NotSupportedException("ByteString enumeration is not supported in Neo smart contracts. Convert to byte[] first.");
+        }
+
+        [Obsolete("ByteString enumeration is not supported in Neo smart contracts. Convert to byte[] first: foreach (var b in (byte[])byteString)", error: true)]
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            throw new NotSupportedException("ByteString enumeration is not supported in Neo smart contracts. Convert to byte[] first.");
+        }
+
+        [OpCode(OpCode.NOP)]
+        public static extern implicit operator string(ByteString str);
+
+        [OpCode(OpCode.NOP)]
+        public static extern implicit operator ByteString(string str);
+
+        [OpCode(OpCode.CONVERT, StackItemType.Buffer)]
+        public static extern explicit operator byte[](ByteString str);
+
+        [OpCode(OpCode.CONVERT, StackItemType.ByteString)]
+        public static extern explicit operator ByteString(byte[] buffer);
+
+        [OpCode(OpCode.DUP)]
+        [OpCode(OpCode.ISNULL)]
+        [OpCode(OpCode.JMPIFNOT, "0x06")]
+        [OpCode(OpCode.DROP)]
+        [OpCode(OpCode.PUSH0)]
+        [OpCode(OpCode.JMP, "0x04")]
+        [OpCode(OpCode.CONVERT, StackItemType.Integer)]
+        public static extern explicit operator BigInteger(ByteString text);
+
+        [OpCode(OpCode.CONVERT, StackItemType.ByteString)]
+        public static extern explicit operator ByteString(BigInteger integer);
+    }
+}

@@ -1,0 +1,403 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// Contract_Storage.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+using Neo.SmartContract.Framework.Services;
+using System.Numerics;
+
+namespace Neo.SmartContract.Framework.UnitTests.TestClasses
+{
+
+#pragma warning disable CS8604
+    public class Contract_Storage : SmartContract
+    {
+        // There is no main here, it can be auto generation.
+
+        #region Byte
+
+        public static bool TestPutByte(byte[] key, byte[] value)
+        {
+            var storage = new StorageMap(Storage.CurrentContext, 0x11);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        public static void TestDeleteByte(byte[] key)
+        {
+            var storage = new StorageMap(Storage.CurrentContext, 0x11);
+            storage.Delete((ByteString)key);
+        }
+
+        public static byte[] TestGetByte(byte[] key)
+        {
+            var context = Storage.CurrentReadOnlyContext;
+            var storage = new StorageMap(context, 0x11);
+            var value = storage.Get((ByteString)key);
+            return (byte[])value;
+        }
+
+        public static byte[] TestOver16Bytes()
+        {
+            var value = new byte[] { 0x3b, 0x00, 0x32, 0x03, 0x23, 0x23, 0x23, 0x23, 0x02, 0x23, 0x23, 0x02, 0x23, 0x23, 0x02, 0x23, 0x23, 0x02, 0x23, 0x23, 0x02, 0x23, 0x23, 0x02 };
+            StorageMap storageMap = new StorageMap(Storage.CurrentContext, "test_map");
+            storageMap.Put((ByteString)new byte[] { 0x01 }, (ByteString)value);
+            return (byte[])storageMap.Get((ByteString)new byte[] { 0x01 });
+        }
+
+        #endregion
+
+        #region String
+
+        public static bool TestPutString(byte[] key, byte[] value)
+        {
+            var prefix = "aa";
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        public static void TestDeleteString(byte[] key)
+        {
+            var prefix = "aa";
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            storage.Delete((ByteString)key);
+        }
+
+        public static byte[] TestGetString(byte[] key)
+        {
+            var prefix = "aa";
+            var context = Storage.CurrentReadOnlyContext;
+            var storage = new StorageMap(context, prefix);
+            var value = storage.Get((ByteString)key);
+            return (byte[])value;
+        }
+
+        public static bool PutLocalString(byte[] key, byte[] value)
+        {
+            var prefix = "bb";
+            var storage = new LocalStorageMap(prefix);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        public static void DeleteLocalString(byte[] key)
+        {
+            var prefix = "bb";
+            var storage = new LocalStorageMap(prefix);
+            storage.Delete((ByteString)key);
+        }
+
+        public static byte[] GetLocalString(byte[] key)
+        {
+            var prefix = "bb";
+            var storage = new LocalStorageMap(prefix);
+            var value = storage.Get((ByteString)key);
+            return (byte[])value;
+        }
+        #endregion
+
+        #region ByteArray
+
+        public static bool TestPutByteArray(byte[] key, byte[] value)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        public static void TestDeleteByteArray(byte[] key)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            storage.Delete((ByteString)key);
+        }
+
+        public static byte[] TestGetByteArray(byte[] key)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var context = Storage.CurrentContext.AsReadOnly;
+            var storage = new StorageMap(context, prefix);
+            var value = storage.Get((ByteString)key);
+            return (byte[])value;
+        }
+
+        public static bool TestNewGetMethods()
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var context = Storage.CurrentContext;
+            var storage = new StorageMap(context, prefix);
+
+            var boolValue = true;
+            var intValue = 123;
+            var stringValue = "hello world";
+            var uint160Value = (UInt160)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09
+            };
+            var uint256Value = (UInt256)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01
+            };
+            var ecPointValue = (ECPoint)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02
+            };
+
+            storage.Put("bool", boolValue);
+            storage.Put("int", intValue);
+            storage.Put("string", stringValue);
+            storage.Put("uint160", uint160Value);
+            storage.Put("uint256", uint256Value);
+            storage.Put("ecpoint", ecPointValue);
+
+            var boolValue2 = storage.GetBoolean("bool");
+            var intValue2 = storage.GetInteger("int");
+            var stringValue2 = storage.GetString("string");
+            var uint160Value2 = storage.GetUInt160("uint160");
+            var uint256Value2 = storage.GetUInt256("uint256");
+            var ecPointValue2 = storage.GetECPoint("ecpoint");
+
+            return boolValue == boolValue2
+                && intValue == intValue2
+                && stringValue == stringValue2
+                && uint160Value == uint160Value2
+                && uint256Value == uint256Value2
+                && ecPointValue == ecPointValue2;
+        }
+
+        public static bool LocalGetPut()
+        {
+            var prefix = new byte[] { 0x01, 0xAA };
+            var storage = new LocalStorageMap(prefix);
+
+            var boolValue = true;
+            var intValue = 123;
+            var stringValue = "hello world";
+            var uint160Value = (UInt160)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09
+            };
+            var uint256Value = (UInt256)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01
+            };
+            var ecPointValue = (ECPoint)new byte[] {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x00, 0x01, 0x02
+            };
+
+            storage.Put("bool", boolValue);
+            storage.Put("int", intValue);
+            storage.Put("string", stringValue);
+            storage.Put("uint160", uint160Value);
+            storage.Put("uint256", uint256Value);
+            storage.Put("ecpoint", ecPointValue);
+
+            var boolValue2 = storage.GetBoolean("bool");
+            var intValue2 = storage.GetInteger("int");
+            var stringValue2 = storage.GetString("string");
+            var uint160Value2 = storage.GetUInt160("uint160");
+            var uint256Value2 = storage.GetUInt256("uint256");
+            var ecPointValue2 = storage.GetECPoint("ecpoint");
+
+            return boolValue == boolValue2
+                && intValue == intValue2
+                && stringValue == stringValue2
+                && uint160Value == uint160Value2
+                && uint256Value == uint256Value2
+                && ecPointValue == ecPointValue2;
+        }
+
+        public static byte[] TestNewGetByteArray()
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var context = Storage.CurrentContext;
+            var storage = new StorageMap(context, prefix);
+            var byteArray = new byte[] { 0x00, 0x01 };
+            storage.Put("byteArray", byteArray);
+            var byteArray2 = storage.GetByteArray("byteArray");
+            return byteArray2;
+        }
+
+        public static bool PutLocalByteArray(byte[] key, byte[] value)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var storage = new LocalStorageMap(prefix);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        public static void DeleteLocalByteArray(byte[] key)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var storage = new LocalStorageMap(prefix);
+            storage.Delete((ByteString)key);
+        }
+
+        public static byte[] GetLocalByteArray(byte[] key)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var storage = new LocalStorageMap(prefix);
+            var value = storage.Get((ByteString)key);
+            return (byte[])value;
+        }
+
+        #endregion
+
+        public static bool TestPutReadOnly(byte[] key, byte[] value)
+        {
+            var prefix = new byte[] { 0x00, 0xFF };
+            var context = Storage.CurrentContext.AsReadOnly;
+            var storage = new StorageMap(context, prefix);
+            storage.Put((ByteString)key, (ByteString)value);
+            return true;
+        }
+
+        #region BigInteger
+
+        public static BigInteger TestIncrease(byte[] key)
+        {
+            var prefix = new byte[] { 0xA0, 0xAF };
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            return storage.Increase((ByteString)key);
+        }
+
+        public static BigInteger TestDecrease(byte[] key)
+        {
+            var prefix = new byte[] { 0xA0, 0xAF };
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            return storage.Decrease((ByteString)key);
+        }
+
+        public static BigInteger LocalIncrease(byte[] key)
+        {
+            var prefix = new byte[] { 0xA0, 0xBF };
+            var storage = new LocalStorageMap(prefix);
+            return storage.Increase((ByteString)key);
+        }
+
+        public static BigInteger LocalDecrease(byte[] key)
+        {
+            var prefix = new byte[] { 0xA0, 0xBF };
+            var storage = new LocalStorageMap(prefix);
+            return storage.Decrease((ByteString)key);
+        }
+
+        public static BigInteger LocalIntegerOrZero(byte[] key)
+        {
+            var prefix = new byte[] { 0xA0, 0xBF };
+            var storage = new LocalStorageMap(prefix);
+            return storage.GetIntegerOrZero((ByteString)key);
+        }
+
+        #endregion
+
+        #region Serialize
+
+        class Value
+        {
+            public int Val;
+        }
+
+        public static int SerializeTest(byte[] key, int value)
+        {
+            var prefix = new byte[] { 0x01, 0xAA };
+            var context = Storage.CurrentContext;
+            var storage = new StorageMap(context, prefix);
+            var val = new Value() { Val = value };
+            storage.PutObject(key, val);
+            val = (Value)storage.GetObject(key)!;
+            return val.Val;
+        }
+
+        public static int LocalGetPutObject(byte[] key, int value)
+        {
+            var prefix = new byte[] { 0x02, 0xBB };
+            var storage = new LocalStorageMap(prefix);
+            var val = new Value() { Val = value };
+            storage.PutObject((ByteString)key, val);
+            val = (Value)storage.GetObject((ByteString)key)!;
+            return val.Val;
+        }
+
+        #endregion
+
+        #region Find
+
+        public static byte[] TestFind()
+        {
+            var context = Storage.CurrentContext;
+            Storage.Put(context, (ByteString)"key1", (ByteString)new byte[] { 0x01 });
+            Storage.Put(context, (ByteString)"key2", (ByteString)new byte[] { 0x02 });
+            Iterator<byte[]> iterator = (Iterator<byte[]>)Storage.Find(context, "key", FindOptions.ValuesOnly);
+            iterator.Next();
+            return iterator.Value;
+        }
+
+        public static byte[] LocalFind()
+        {
+            var prefix = "find";
+            var storage = new LocalStorageMap(prefix);
+            storage.Put((ByteString)"key1", (ByteString)new byte[] { 0x01 });
+            storage.Put((ByteString)"key2", (ByteString)new byte[] { 0x02 });
+            Iterator<byte[]> iterator = (Iterator<byte[]>)storage.Find(FindOptions.ValuesOnly);
+            iterator.Next();
+            return iterator.Value;
+        }
+
+        #endregion
+
+        #region IndexProperty
+
+        public static bool TestIndexPut(byte[] key, byte[] value)
+        {
+            var prefix = "ii";
+            var storage = new StorageMap(Storage.CurrentContext, prefix);
+            storage[(ByteString)key] = (ByteString)value;
+            return true;
+        }
+
+        public static byte[] TestIndexGet(byte[] key)
+        {
+            var prefix = "ii";
+            var context = Storage.CurrentReadOnlyContext;
+            var storage = new StorageMap(context, prefix);
+            var value = storage[(ByteString)key];
+            return (byte[])value;
+        }
+
+        public static void LocalIndexPut(byte[] key, byte[] value)
+        {
+            var prefix = "index";
+            var storage = new LocalStorageMap(prefix);
+            storage[(ByteString)key] = (ByteString)value;
+        }
+
+        public static byte[] LocalIndexGet(byte[] key)
+        {
+            var prefix = "index";
+            var storage = new LocalStorageMap(prefix);
+            var value = storage[(ByteString)key];
+            return (byte[])value;
+        }
+
+        #endregion
+    }
+#pragma warning restore CS8604
+}

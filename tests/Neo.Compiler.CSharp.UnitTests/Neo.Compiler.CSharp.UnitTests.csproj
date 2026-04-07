@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<LangVersion>latest</LangVersion>
+		<RootNamespace>Neo.Compiler.CSharp.UnitTests</RootNamespace>
+		<Nullable>enable</Nullable>
+		<IsPackable>false</IsPackable>
+		<IsTestProject>true</IsTestProject>
+		<NoWarn>CS0067;CS8981</NoWarn> <!-- disable CS0067(event is never used) -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\src\Neo.Compiler.CSharp\Neo.Compiler.CSharp.csproj" />
+		<ProjectReference Include="..\..\src\Neo.SmartContract.Framework\Neo.SmartContract.Framework.csproj">
+			<Aliases>scfx</Aliases>
+		</ProjectReference>
+		<ProjectReference Include="..\..\src\Neo.SmartContract.Testing\Neo.SmartContract.Testing.csproj" />
+		<ProjectReference Include="..\..\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" />
+	</ItemGroup>
+
+	<!-- RISC-V native library for direct P/Invoke testing -->
+	<ItemGroup>
+		<Content Include="..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so"
+		         Condition="Exists('..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so')">
+			<Link>libneo_riscv_host.so</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="..\..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so"
+		         Condition="Exists('..\..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so')">
+			<Link>libneo_riscv_host.so</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+
+</Project>

@@ -1,0 +1,152 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// UInt160.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+using System;
+using Neo.SmartContract.Framework.Attributes;
+using Neo.SmartContract.Framework.Helpers;
+using Neo.SmartContract.Framework.Native;
+using Neo.SmartContract.Framework.Services;
+
+namespace Neo.SmartContract.Framework
+{
+    public abstract class UInt160 : ByteString
+    {
+        public static extern UInt160 Zero { [OpCode(OpCode.PUSHDATA1, "140000000000000000000000000000000000000000")] get; }
+
+        public static int Size => 20;
+
+        /// <summary>
+        /// Checks if the value is zero.
+        /// The execution will fail if the value is null.
+        /// </summary>
+        public extern bool IsZero
+        {
+            [OpCode(OpCode.PUSH0)]
+            [OpCode(OpCode.NUMEQUAL)]
+            get;
+        }
+
+        /// <summary>
+        /// Checks if the value is valid.
+        /// It returns true if the value is not null and has 20 bytes ByteString, false otherwise.
+        /// Calling this method is OK even if the value is null.
+        /// </summary>
+        public extern bool IsValid
+        {
+            [OpCode(OpCode.DUP)]
+            [OpCode(OpCode.ISTYPE, "0x28")] // ByteString
+            [OpCode(OpCode.JMPIF, "06")]    // Jump to SIZE
+            [OpCode(OpCode.DROP)]
+            [OpCode(OpCode.PUSHF)]
+            [OpCode(OpCode.JMP, "06")]    // Jump to the end
+            [OpCode(OpCode.SIZE)]
+            [OpCode(OpCode.PUSHINT8, "14")] // 0x14 == 20 bytes expected array size
+            [OpCode(OpCode.NUMEQUAL)]
+            get;
+        }
+
+        /// <summary>
+        /// Checks if the value is valid and not zero.
+        /// It returns true if the value is not null, has 20 bytes ByteString, and is not zero, false otherwise.
+        /// It's OK to call this method even if the value is null.
+        /// </summary>
+        public bool IsValidAndNotZero => IsValid && !IsZero;
+
+        /// <summary>
+        /// Explicitly converts a byte array to a UInt160 object.
+        /// Exception will be thrown if the value is null, or not 20 bytes.
+        /// </summary>
+        [OpCode(OpCode.CONVERT, StackItemType.ByteString)]
+        [OpCode(OpCode.DUP)]
+        [OpCode(OpCode.ISNULL)]
+        [OpCode(OpCode.JMPIF, "09")]
+        [OpCode(OpCode.DUP)]
+        [OpCode(OpCode.SIZE)]
+        [OpCode(OpCode.PUSHINT8, "14")] // 0x14 == 20 bytes expected array size
+        [OpCode(OpCode.JMPEQ, "03")]
+        [OpCode(OpCode.THROW)]
+        public static extern explicit operator UInt160(byte[] value);
+
+        /// <summary>
+        /// Explicitly converts a UInt160 object to a 20 bytes Buffer.
+        /// </summary>
+        [OpCode(OpCode.CONVERT, StackItemType.Buffer)]
+        public static extern explicit operator byte[](UInt160 value);
+
+        /// <summary>
+        /// Converts the specified script hash to an address, using the current blockchain AddressVersion value.
+        /// </summary>
+        /// <returns>The converted address.</returns>
+        public string ToAddress()
+        {
+            return ToAddress(Runtime.AddressVersion);
+        }
+
+        /// <summary>
+        /// Converts the specified script hash to an address.
+        /// </summary>
+        /// <param name="version">The address version.</param>
+        /// <returns>The converted address.</returns>
+        public string ToAddress(byte version)
+        {
+            byte[] data = { version };
+            data = Helper.Concat(data, this);
+            return StdLib.Base58CheckEncode((ByteString)data);
+        }
+
+        /// <summary>
+        /// Parses a string into a <see cref="UInt160"/>. Accepts either a 20-byte hex string
+        /// (optionally prefixed with <c>0x</c>) or a Base58Check address matching the current
+        /// <see cref="Runtime.AddressVersion"/>.
+        /// </summary>
+        /// <param name="value">Hex string or Base58Check address.</param>
+        /// <returns>The parsed <see cref="UInt160"/> value.</returns>
+        /// <exception cref="FormatException">Thrown for null input, invalid length, or invalid address version.</exception>
+        /// <remarks>
+        /// Note: If the input is a Base58Check address with invalid encoding, the underlying
+        /// <see cref="StdLib.Base58CheckDecode"/> will cause execution to FAULT (abort),
+        /// which cannot be caught. Only use this method with validated input or hex strings.
+        /// </remarks>
+        public static UInt160 Parse(string value)
+        {
+            if (value is null) throw new FormatException("Value cannot be null.");
+
+            try
+            {
+                byte[] data = ParseHelper.ParseHex(value.ToByteArray());
+                if (data.Length != UInt160.Size)
+                    throw new FormatException("UInt160 must be 20 bytes long.");
+                return (UInt160)data.Reverse();
+            }
+            catch (FormatException) { }
+
+            if (value.Length == 34) // The address is 34 characters base58check encoded (20 bytes + 1 version byte)
+                return (UInt160)ParseHelper.ParseAddress(value, Runtime.AddressVersion);
+            throw new FormatException("Invalid UInt160 string format.");
+        }
+
+        /// <summary>
+        /// Implicitly converts a hexadecimal string to a UInt160 object.
+        /// This can be a 20 bytes hex string or a neo address.
+        /// <example>
+        /// 20 bytes hex string: "01ff00ff00ff00ff00ff00ff00ff00ff00ff00a4" (no prefix)
+        ///             Address: "NZNosnRn6FpRjwGKx8VdXv5Sn7BvzrjZVb"
+        /// </example>
+        /// <remarks>
+        /// This is a compile time conversion, only work with constant string.
+        /// If you want to convert a runtime string, convert it to byte[] first.
+        /// </remarks>
+        /// </summary>
+#pragma warning disable CS0626 // Method, operator, or accessor is marked external and has no attributes on it
+        public static extern implicit operator UInt160(string value);
+#pragma warning restore CS0626 // Method, operator, or accessor is marked external and has no attributes on it
+    }
+}

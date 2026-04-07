@@ -1,0 +1,281 @@
+// Copyright (C) 2015-2026 The Neo Project.
+//
+// ContractManifestExtension.Nep11.cs file belongs to the neo project and is free
+// software distributed under the MIT software license, see the
+// accompanying file LICENSE in the main directory of the
+// repository or http://www.opensource.org/licenses/mit-license.php
+// for more details.
+//
+// Redistribution and use in source and binary forms with or without
+// modifications are permitted.
+
+extern alias scfx;
+using System;
+using System.Linq;
+using Neo.SmartContract.Manifest;
+using scfx::Neo.SmartContract.Framework;
+using ContractParameterType = Neo.SmartContract.ContractParameterType;
+
+namespace Neo.Compiler;
+
+internal static partial class ContractManifestExtensions
+{
+    private static void ValidateNep11SingleParameterSafeMethod(
+        System.Collections.Generic.List<CompilationException> errors,
+        ContractMethodDescriptor? method,
+        string methodName,
+        ContractParameterType returnType,
+        string returnTypeDescription,
+        ContractParameterType parameterType,
+        string parameterTypeDescription)
+    {
+        if (method is null)
+        {
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: {methodName}, it is not found in the ABI"));
+            return;
+        }
+
+        if (!method.Safe)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: {methodName}, it is not safe, you should add a 'Safe' attribute to the {methodName} method"));
+
+        if (method.ReturnType != returnType)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: {methodName}, it's return type is not {returnTypeDescription}"));
+
+        if (method.Parameters.Length != 1)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: {methodName}, it's parameters length is not 1"));
+
+        if (method.Parameters.Length > 0 && method.Parameters[0].Type != parameterType)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: {methodName}, it's parameters type is not {parameterTypeDescription}"));
+    }
+
+    private static System.Collections.Generic.List<CompilationException>
+        CheckNep11Compliant(this ContractManifest manifest)
+    {
+        System.Collections.Generic.List<CompilationException> errors = [];
+
+        var symbolMethod = manifest.Abi.GetMethod("symbol", 0);
+        var decimalsMethod = manifest.Abi.GetMethod("decimals", 0);
+        var totalSupplyMethod = manifest.Abi.GetMethod("totalSupply", 0);
+        var balanceOfMethod1 = manifest.Abi.GetMethod("balanceOf", 1);
+        var balanceOfMethod2 = manifest.Abi.GetMethod("balanceOf", 2);
+        var tokensOfMethod = manifest.Abi.GetMethod("tokensOf", 1);
+        var ownerOfMethod = manifest.Abi.GetMethod("ownerOf", 1);
+        var transferMethod1 = manifest.Abi.GetMethod("transfer", 3);
+        var transferMethod2 = manifest.Abi.GetMethod("transfer", 5);
+
+        var symbolValid = symbolMethod is not null && symbolMethod.Safe &&
+                            symbolMethod.ReturnType == ContractParameterType.String;
+
+        if (symbolMethod is null)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: symbol, it is not found in the ABI"));
+
+        if (symbolMethod is { Safe: false })
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: symbol, it is not safe, you should add a 'Safe' attribute to the symbol method"));
+
+        if (symbolMethod is not null && symbolMethod.ReturnType != ContractParameterType.String)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: symbol, it's return type is not a string"));
+
+        if (decimalsMethod is null)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: decimals, it is not found in the ABI"));
+
+        if (decimalsMethod is { Safe: false })
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: decimals, it is not safe, you should add a 'Safe' attribute to the decimals method"));
+
+        if (decimalsMethod is not null && decimalsMethod.ReturnType != ContractParameterType.Integer)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: decimals, it's return type is not an integer"));
+
+
+        if (totalSupplyMethod is null)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: totalSupply, it is not found in the ABI"));
+
+        if (totalSupplyMethod is { Safe: false })
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: totalSupply, it is not safe, you should add a 'Safe' attribute to the totalSupply method"));
+
+        if (totalSupplyMethod is not null && totalSupplyMethod.ReturnType != ContractParameterType.Integer)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: totalSupply, it's return type is not an integer"));
+
+        if (balanceOfMethod1 is null && balanceOfMethod2 is null)
+        {
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it is not found in the ABI"));
+        }
+
+        if (balanceOfMethod1 is not null)
+        {
+            if (balanceOfMethod1 is { Safe: false })
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it is not safe, you should add a 'Safe' attribute to the balanceOf method"));
+
+            if (balanceOfMethod1 is not null && balanceOfMethod1.ReturnType != ContractParameterType.Integer)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's return type is not an integer"));
+
+            if (balanceOfMethod1 is not null && balanceOfMethod1.Parameters.Length != 1)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's parameters length is not 1"));
+
+            if (balanceOfMethod1 is not null && balanceOfMethod1.Parameters[0].Type != ContractParameterType.Hash160)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's parameters type is not a Hash160"));
+        }
+
+        if (balanceOfMethod2 is not null)
+        {
+            if (balanceOfMethod2 is { Safe: false })
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it is not safe, you should add a 'Safe' attribute to the balanceOf method"));
+
+            if (balanceOfMethod2 is not null && balanceOfMethod2.ReturnType != ContractParameterType.Integer)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's return type is not an integer"));
+
+            if (balanceOfMethod2 is not null && balanceOfMethod2.Parameters.Length != 2)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's parameters length is not 2"));
+
+            if (balanceOfMethod2 is not null && balanceOfMethod2.Parameters[0].Type != ContractParameterType.Hash160)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's first parameters type is not a Hash160"));
+
+            if (balanceOfMethod2 is not null && balanceOfMethod2.Parameters[1].Type != ContractParameterType.ByteArray)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                    $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it's second parameters type is not a ByteArray"));
+
+        }
+        // errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+        // $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: balanceOf, it is not found in the ABI"));
+
+        ValidateNep11SingleParameterSafeMethod(
+            errors,
+            tokensOfMethod,
+            "tokensOf",
+            ContractParameterType.InteropInterface,
+            "an InteropInterface",
+            ContractParameterType.Hash160,
+            "a Hash160");
+        ValidateNep11SingleParameterSafeMethod(
+            errors,
+            ownerOfMethod,
+            "ownerOf",
+            ContractParameterType.Hash160,
+            "a Hash160",
+            ContractParameterType.ByteArray,
+            "a ByteArray");
+
+
+        if (transferMethod1 is null && transferMethod2 is null)
+        {
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it is not found in the ABI"));
+        }
+
+        if (transferMethod1 is not null)
+        {
+            if (transferMethod1 is { Safe: false } &&
+           transferMethod1.ReturnType != ContractParameterType.Boolean)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it is not safe, you should add a 'Safe' attribute to the transfer method"));
+
+            if (transferMethod1 is not null && transferMethod1.ReturnType != ContractParameterType.Boolean)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's return type is not a Boolean"));
+
+            if (transferMethod1 is not null && transferMethod1.Parameters.Length != 3)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's parameters length is not 3"));
+
+            if (transferMethod1 is not null && transferMethod1.Parameters[0].Type != ContractParameterType.Hash160)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's first parameters type is not a Hash160"));
+
+            if (transferMethod1 is not null && transferMethod1.Parameters[1].Type != ContractParameterType.ByteArray)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's second parameters type is not a ByteArray"));
+
+            if (transferMethod1 is not null && transferMethod1.Parameters[2].Type != ContractParameterType.Any)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's third parameters type is not a Any"));
+        }
+
+        if (transferMethod2 is not null)
+        {
+            if (transferMethod2 is { Safe: false } &&
+          transferMethod2.ReturnType != ContractParameterType.Boolean)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it is not safe, you should add a 'Safe' attribute to the transfer method"));
+
+            if (transferMethod2 is not null && transferMethod2.ReturnType != ContractParameterType.Boolean)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's return type is not a Boolean"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters.Length != 5)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's parameters length is not 5"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters[0].Type != ContractParameterType.Hash160)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's first parameters type is not a Hash160"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters[1].Type != ContractParameterType.Hash160)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's second parameters type is not a Hash160"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters[2].Type != ContractParameterType.Integer)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's third parameters type is not an Integer"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters[3].Type != ContractParameterType.ByteArray)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's fourth parameters type is not a ByteArray"));
+
+            if (transferMethod2 is not null && transferMethod2.Parameters[4].Type != ContractParameterType.Any)
+                errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's fifth parameters type is not a Any"));
+
+        }
+        // errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+        // $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it is not found in the ABI"));
+
+        // Check Transfer event
+        var transferEvent = manifest.Abi.Events.FirstOrDefault(a => a.Name == "Transfer");
+        if (transferEvent is null)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+                $"Incomplete NEP standard {NepStandard.Nep11.ToStandard()} implementation: Transfer event is not found in the ABI"));
+
+        if (transferEvent is not null && transferEvent.Parameters.Length != 4)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's parameters length is not 4"));
+
+        if (transferEvent is not null && transferEvent.Parameters[0].Type != ContractParameterType.Hash160)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's first parameters type is not a Hash160"));
+
+        if (transferEvent is not null && transferEvent.Parameters[1].Type != ContractParameterType.Hash160)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's second parameters type is not a Hash160"));
+
+        if (transferEvent is not null && transferEvent.Parameters[2].Type != ContractParameterType.Integer)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's third parameters type is not an Integer"));
+
+        if (transferEvent is not null && transferEvent.Parameters[3].Type != ContractParameterType.ByteArray)
+            errors.Add(new CompilationException(DiagnosticId.IncorrectNEPStandard,
+            $"Incomplete or unsafe NEP standard {NepStandard.Nep11.ToStandard()} implementation: transfer, it's fourth parameters type is not a ByteArray"));
+
+        return errors;
+    }
+}

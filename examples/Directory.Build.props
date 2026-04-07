@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+    <PropertyGroup Condition="'$(IsTestProject)' != 'true'">
+        <Copyright>2024 The Neo SmartContract Examples Project</Copyright>
+        <VersionPrefix>3.9.1</VersionPrefix>
+        <TargetFramework>net10.0</TargetFramework>
+        <Authors>The Neo SmartContract Examples Project</Authors>
+        <PackageIcon>neo.png</PackageIcon>
+        <PackageProjectUrl>https://github.com/neo-project/neo-devpack-dotnet/examples</PackageProjectUrl>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <RepositoryType>git</RepositoryType>
+        <RepositoryUrl>https://github.com/neo-project/neo-devpack-dotnet.git</RepositoryUrl>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <Company>The Neo N3 Contract Examples Project</Company>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+        
+        <!-- Force library project style instead of DotnetToolReference -->
+        <OutputType>Library</OutputType>
+        <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <GenerateGlobalAssemblyInfo>false</GenerateGlobalAssemblyInfo>
+        
+        <!-- Explicitly override any DotnetToolReference settings -->
+        <EnableDefaultItems>true</EnableDefaultItems>
+        <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <EnableDefaultEmbeddedResourceItems>true</EnableDefaultEmbeddedResourceItems>
+        <EnableDefaultNoneItems>true</EnableDefaultNoneItems>
+        <UsingMicrosoftNETSdk>true</UsingMicrosoftNETSdk>
+        
+        <NeoPackageVersion>3.9.1</NeoPackageVersion>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(IsTestProject)' != 'true'">
+        <PackageReference Include="Neo.SmartContract.Framework" Version="$(NeoPackageVersion)"/>
+        <PackageReference Include="Neo.SmartContract.Testing" Version="$(NeoPackageVersion)"/>
+        <PackageReference Include="Neo.SmartContract.Analyzer" Version="$(NeoPackageVersion)">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <Target Name="ExecuteBeforeBuild" BeforeTargets="PreBuildEvent"
+            Condition="'$(IsTestProject)' != 'true' AND '$(MSBuildProjectName)' != 'TestContract' AND '$(DisableArtifactGeneration)' != 'true'">
+        <Exec Command="nccs &quot;$(MSBuildProjectFile)&quot;" ContinueOnError="true"/>
+    </Target>
+
+    <!-- Smart Contract Artifact Generation Target -->
+    <Target Name="GenerateSmartContractArtifacts" AfterTargets="Build" Condition="'$(IsTestProject)' != 'true' AND '$(MSBuildProjectName)' != 'TestContract' AND '$(DisableArtifactGeneration)' != 'true'">
+        <PropertyGroup>
+            <ContractName>$(MSBuildProjectName)</ContractName>
+            <UnitTestProjectDir>$(MSBuildProjectDirectory).UnitTests</UnitTestProjectDir>
+            <TestingArtifactsDir>$(UnitTestProjectDir)\TestingArtifacts</TestingArtifactsDir>
+            <ArtifactClassName>Sample$(ContractName.Replace('Example.SmartContract.', ''))</ArtifactClassName>
+            <NefFilePath>$(OutputPath)$(AssemblyName).nef</NefFilePath>
+            <ManifestFilePath>$(OutputPath)$(AssemblyName).manifest.json</ManifestFilePath>
+        </PropertyGroup>
+        
+        <!-- Generate artifact using nccs with additional parameters if unit test project exists -->
+        <Message Text="Checking for unit test project: $(UnitTestProjectDir)" Condition="Exists('$(UnitTestProjectDir)')" />
+        <MakeDir Directories="$(TestingArtifactsDir)" Condition="Exists('$(UnitTestProjectDir)') AND !Exists('$(TestingArtifactsDir)')" />
+        
+        <!-- Use nccs to generate artifacts for unit tests -->
+        <Exec Command="nccs &quot;$(MSBuildProjectFile)&quot; --base-name &quot;$(ArtifactClassName)&quot; --output &quot;$(TestingArtifactsDir)&quot; --generate-artifacts Source" 
+              ContinueOnError="true" 
+              Condition="Exists('$(UnitTestProjectDir)')" />
+    </Target>
+
+</Project>
