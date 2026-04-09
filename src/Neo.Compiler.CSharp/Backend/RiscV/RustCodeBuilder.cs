@@ -82,15 +82,7 @@ internal class RustCodeBuilder
         sb.AppendLine();
         sb.AppendLine("use neo_riscv_rt::Context;");
         sb.AppendLine("use neo_riscv_rt::stack_value::StackValue;");
-        sb.AppendLine("use neo_riscv_contract_harness::{decode_entry, encode_result, bridge_syscall, set_host_call};");
-        sb.AppendLine();
-
-        // PolkaVM host imports
-        sb.AppendLine("// === PolkaVM host imports ===");
-        sb.AppendLine("#[polkavm_derive::polkavm_import]");
-        sb.AppendLine("extern \"C\" {");
-        sb.AppendLine("    fn host_call(api: u32, ip: u32, stack_ptr: u32, stack_len: u32, result_ptr: u32, result_cap: u32) -> u32;");
-        sb.AppendLine("}");
+        sb.AppendLine("use neo_riscv_contract_harness::{decode_entry, encode_result, bridge_syscall};");
         sb.AppendLine();
 
         // Allocator (simple bump allocator using a static arena)
@@ -165,8 +157,7 @@ internal class RustCodeBuilder
         sb.AppendLine();
         sb.AppendLine("#[polkavm_derive::polkavm_export]");
         sb.AppendLine("pub extern \"C\" fn execute(stack_ptr: u32, stack_len: u32) {");
-        sb.AppendLine("    // Register the host_call import and syscall bridge before any contract code runs.");
-        sb.AppendLine("    set_host_call(host_call);");
+        sb.AppendLine("    // Register the syscall bridge before any contract code runs.");
         sb.AppendLine("    neo_riscv_rt::set_syscall_bridge(bridge_syscall);");
         sb.AppendLine();
         sb.AppendLine("    let stack_data = unsafe {");

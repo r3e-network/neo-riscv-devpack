@@ -36,7 +36,7 @@ public class UnitTest_RiscVTarget
 
         Assert.IsTrue(rustSource.Contains("fn method_balanceof(ctx: &mut Context)"));
         Assert.IsTrue(rustSource.Contains("ctx.init_slot(0, 1);"));
-        Assert.IsTrue(rustSource.Contains("ctx.syscall(0x4a100170);"));
+        Assert.IsTrue(rustSource.Contains("bridge_syscall(ctx, 0x4a100170);"));
         Assert.IsTrue(rustSource.Contains("ctx.load_arg(0);"));
         Assert.IsTrue(rustSource.Contains("ctx.convert(0x02);"));
         Assert.IsTrue(rustSource.Contains("ctx.ret();"));

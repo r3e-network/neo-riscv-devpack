@@ -49,7 +49,7 @@ public class UnitTest_NeoVmToRustTranslator
         {
             ("getStorage", instructions)
         });
-        Assert.IsTrue(rust.Contains("ctx.syscall(0x31e85d92);"), $"Expected syscall in:\n{rust}");
+        Assert.IsTrue(rust.Contains("bridge_syscall(ctx, 0x31e85d92);"), $"Expected bridge_syscall in:\n{rust}");
     }
 
     [TestMethod]

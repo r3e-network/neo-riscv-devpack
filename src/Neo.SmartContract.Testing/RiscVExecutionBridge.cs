@@ -78,12 +78,12 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,    // *const NativeStackItem
         nuint inputStackLen,
-        IntPtr output);          // *mut NativeHostResult
+        out NativeHostResult output);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void HostFreeCallbackDelegate(
         IntPtr userData,
-        IntPtr result);          // *mut NativeHostResult
+        ref NativeHostResult result);
 
     // ---------------------------------------------------------------
     //  Native function delegate types
@@ -250,6 +250,17 @@ public static class RiscVExecutionBridge
 
             var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
 
+            if (!ok)
+            {
+                return new ExecutionResult
+                {
+                    State = 1,
+                    FeeConsumedPico = nativeResult.FeeConsumedPico,
+                    Error = "neo_riscv_execute_native_contract returned false.",
+                    Stack = Array.Empty<ResultStackItem>(),
+                };
+            }
+
             string? error = null;
             if (nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0)
             {
@@ -302,24 +313,13 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,
         nuint inputStackLen,
-        IntPtr output)
+        out NativeHostResult output)
     {
-        // Write a NativeHostResult with empty stack to the output pointer.
-        if (output != IntPtr.Zero)
-        {
-            var result = new NativeHostResult
-            {
-                StackPtr = IntPtr.Zero,
-                StackLen = 0,
-                ErrorPtr = IntPtr.Zero,
-                ErrorLen = 0,
-            };
-            Marshal.StructureToPtr(result, output, false);
-        }
+        output = CreateEmptyOutput();
         return true;
     }
 
-    private static void DummyHostFree(IntPtr userData, IntPtr result)
+    private static void DummyHostFree(IntPtr userData, ref NativeHostResult result)
     {
         // The dummy callback allocates nothing, so nothing to free.
     }
@@ -445,6 +445,8 @@ public static class RiscVExecutionBridge
             freeCallback = DummyHostFree;
         }
 
+        var callbackHandle = GCHandle.Alloc(callback);
+        var freeCallbackHandle = GCHandle.Alloc(freeCallback);
         var callbackPtr = Marshal.GetFunctionPointerForDelegate(callback);
         var freePtr = Marshal.GetFunctionPointerForDelegate(freeCallback);
 
@@ -463,7 +465,7 @@ public static class RiscVExecutionBridge
         {
             var userData = host != null ? GCHandle.ToIntPtr(hostHandle) : IntPtr.Zero;
 
-            s_executeNativeContract!(
+            var ok = s_executeNativeContract!(
                 binaryHandle.AddrOfPinnedObject(),
                 (nuint)binary.Length,
                 methodHandle.AddrOfPinnedObject(),
@@ -482,6 +484,17 @@ public static class RiscVExecutionBridge
                 resultPtr);
 
             var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
+
+            if (!ok)
+            {
+                return new ExecutionResult
+                {
+                    State = 1,
+                    FeeConsumedPico = nativeResult.FeeConsumedPico,
+                    Error = "neo_riscv_execute_native_contract returned false.",
+                    Stack = Array.Empty<ResultStackItem>(),
+                };
+            }
 
             string? error = null;
             if (nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0)
@@ -512,6 +525,8 @@ public static class RiscVExecutionBridge
             binaryHandle.Free();
             if (hostHandle.IsAllocated)
                 hostHandle.Free();
+            callbackHandle.Free();
+            freeCallbackHandle.Free();
         }
     }
 
@@ -544,6 +559,8 @@ public static class RiscVExecutionBridge
             freeCallback = DummyHostFree;
         }
 
+        var callbackHandle = GCHandle.Alloc(callback);
+        var freeCallbackHandle = GCHandle.Alloc(freeCallback);
         var callbackPtr = Marshal.GetFunctionPointerForDelegate(callback);
         var freePtr = Marshal.GetFunctionPointerForDelegate(freeCallback);
 
@@ -595,7 +612,7 @@ public static class RiscVExecutionBridge
         {
             var userData = host != null ? GCHandle.ToIntPtr(hostHandle) : IntPtr.Zero;
 
-            s_executeNativeContract!(
+            var ok = s_executeNativeContract!(
                 binaryHandle.AddrOfPinnedObject(),
                 (nuint)binary.Length,
                 methodHandle.AddrOfPinnedObject(),
@@ -614,6 +631,17 @@ public static class RiscVExecutionBridge
                 resultPtr);
 
             var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
+
+            if (!ok)
+            {
+                return new ExecutionResult
+                {
+                    State = 1,
+                    FeeConsumedPico = nativeResult.FeeConsumedPico,
+                    Error = "neo_riscv_execute_native_contract returned false.",
+                    Stack = Array.Empty<ResultStackItem>(),
+                };
+            }
 
             string? error = null;
             if (nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0)
@@ -648,6 +676,8 @@ public static class RiscVExecutionBridge
             binaryHandle.Free();
             if (hostHandle.IsAllocated)
                 hostHandle.Free();
+            callbackHandle.Free();
+            freeCallbackHandle.Free();
         }
     }
 
@@ -684,14 +714,19 @@ public static class RiscVExecutionBridge
     }
 
     /// <summary>
-    /// Allocates a NativeStackItem on unmanaged heap and writes the result.
-    /// Caller must free via TestHostFreeImpl.
+    /// Writes a single NativeStackItem result to the output NativeHostResult.
     /// </summary>
-    private static IntPtr AllocateResultItem(uint kind, long integerValue, byte[]? bytes)
+    private static NativeHostResult CreateSingleOutput(uint kind, long integerValue, byte[]? bytes)
     {
         var itemSize = Marshal.SizeOf<NativeStackItem>();
-        var ptr = Marshal.AllocHGlobal(itemSize);
-        var item = new NativeStackItem { Kind = kind, IntegerValue = integerValue };
+        var arrayPtr = Marshal.AllocHGlobal(itemSize);
+        Marshal.Copy(new byte[itemSize], 0, arrayPtr, itemSize);
+
+        var item = new NativeStackItem
+        {
+            Kind = kind,
+            IntegerValue = integerValue,
+        };
 
         if (bytes != null && bytes.Length > 0)
         {
@@ -701,76 +736,48 @@ public static class RiscVExecutionBridge
             item.BytesLen = (nuint)bytes.Length;
         }
 
-        Marshal.StructureToPtr(item, ptr, false);
-        return ptr;
-    }
-
-    /// <summary>
-    /// Writes a single NativeStackItem result to the output NativeHostResult.
-    /// </summary>
-    private static void WriteOutputSingle(IntPtr output, uint kind, long integerValue, byte[]? bytes)
-    {
-        if (output == IntPtr.Zero) return;
-
-        var itemPtr = AllocateResultItem(kind, integerValue, bytes);
-        var itemSize = Marshal.SizeOf<NativeStackItem>();
-        var arrayPtr = Marshal.AllocHGlobal(itemSize);
-        // Copy the item into the array
-        var item = Marshal.PtrToStructure<NativeStackItem>(itemPtr);
         Marshal.StructureToPtr(item, arrayPtr, false);
-        Marshal.FreeHGlobal(itemPtr);
 
-        var result = new NativeHostResult
+        return new NativeHostResult
         {
             StackPtr = arrayPtr,
             StackLen = 1,
             ErrorPtr = IntPtr.Zero,
             ErrorLen = 0,
         };
-        Marshal.StructureToPtr(result, output, false);
     }
 
     /// <summary>
     /// Writes an empty result to the output NativeHostResult.
     /// </summary>
-    private static void WriteOutputEmpty(IntPtr output)
+    private static NativeHostResult CreateEmptyOutput()
     {
-        if (output == IntPtr.Zero) return;
-        var result = new NativeHostResult
+        return new NativeHostResult
         {
             StackPtr = IntPtr.Zero,
             StackLen = 0,
             ErrorPtr = IntPtr.Zero,
             ErrorLen = 0,
         };
-        Marshal.StructureToPtr(result, output, false);
     }
 
     /// <summary>
     /// Writes an error message to the output NativeHostResult.
     /// </summary>
-    private static void WriteOutputError(IntPtr output, string message)
+    private static NativeHostResult CreateErrorOutput(string message)
     {
-        if (output == IntPtr.Zero) return;
         var errorBytes = Encoding.UTF8.GetBytes(message);
         var errorPtr = Marshal.AllocHGlobal(errorBytes.Length);
         Marshal.Copy(errorBytes, 0, errorPtr, errorBytes.Length);
 
-        var result = new NativeHostResult
+        return new NativeHostResult
         {
             StackPtr = IntPtr.Zero,
             StackLen = 0,
             ErrorPtr = errorPtr,
             ErrorLen = (nuint)errorBytes.Length,
         };
-        Marshal.StructureToPtr(result, output, false);
     }
-
-    /// <summary>
-    /// Tracks allocated NativeStackItem arrays for cleanup.
-    /// </summary>
-    private static readonly List<IntPtr> s_allocatedArrays = new();
-    private static readonly object s_allocLock = new();
 
     /// <summary>
     /// Native callback implementation that dispatches to TestHostCallback.
@@ -786,7 +793,7 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,
         nuint inputStackLen,
-        IntPtr output)
+        out NativeHostResult output)
     {
         var host = (TestHostCallback)GCHandle.FromIntPtr(userData).Target!;
         var input = ReadInputStack(inputStackPtr, inputStackLen);
@@ -798,12 +805,12 @@ public static class RiscVExecutionBridge
             case ApiIds.StorageGetContext:
             case ApiIds.StorageGetReadOnlyContext:
                 // Return a dummy context (integer 0)
-                WriteOutputSingle(output, 0, 0, null);
+                output = CreateSingleOutput(0, 0, null);
                 return true;
 
             case ApiIds.StorageAsReadOnly:
                 // Return the same context (no-op)
-                WriteOutputSingle(output, 0, 0, null);
+                output = CreateSingleOutput(0, 0, null);
                 return true;
 
             case ApiIds.StorageGet:
@@ -813,17 +820,17 @@ public static class RiscVExecutionBridge
                     var key = ReadItemBytes(input[0]);
                     if (host.Storage.TryGetValue(key, out var value))
                     {
-                        WriteOutputSingle(output, 1, 0, value);
+                        output = CreateSingleOutput(1, 0, value);
                     }
                     else
                     {
                         // Key not found — return null
-                        WriteOutputSingle(output, 2, 0, null);
+                        output = CreateSingleOutput(2, 0, null);
                     }
                 }
                 else
                 {
-                    WriteOutputSingle(output, 2, 0, null);
+                    output = CreateSingleOutput(2, 0, null);
                 }
                 return true;
 
@@ -842,7 +849,7 @@ public static class RiscVExecutionBridge
                     var value = ReadItemBytes(input[1]);
                     host.Storage[key] = value;
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.StorageDelete:
@@ -857,12 +864,12 @@ public static class RiscVExecutionBridge
                     var key = ReadItemBytes(input[0]);
                     host.Storage.Remove(key);
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.StorageFind:
                 // Return an empty iterator handle
-                WriteOutputSingle(output, 6, 0, null);
+                output = CreateSingleOutput(6, 0, null);
                 return true;
 
             // --- Storage.Local syscalls ---
@@ -872,13 +879,13 @@ public static class RiscVExecutionBridge
                 {
                     var key = ReadItemBytes(input[1]);
                     if (host.Storage.TryGetValue(key, out var val))
-                        WriteOutputSingle(output, 1, 0, val);
+                        output = CreateSingleOutput(1, 0, val);
                     else
-                        WriteOutputEmpty(output);
+                        output = CreateEmptyOutput();
                 }
                 else
                 {
-                    WriteOutputEmpty(output);
+                    output = CreateEmptyOutput();
                 }
                 return true;
 
@@ -890,7 +897,7 @@ public static class RiscVExecutionBridge
                     var value = ReadItemBytes(input[2]);
                     host.Storage[key] = value;
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.StorageLocalDelete:
@@ -900,18 +907,17 @@ public static class RiscVExecutionBridge
                     var key = ReadItemBytes(input[1]);
                     host.Storage.Remove(key);
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.StorageLocalFind:
                 // Return an empty iterator handle
-                WriteOutputSingle(output, 6, 0, null);
+                output = CreateSingleOutput(6, 0, null);
                 return true;
 
             // --- Runtime syscalls ---
             case ApiIds.RuntimeCheckWitness:
-                // Always return true in tests
-                WriteOutputSingle(output, 3, 1, null);
+                output = CreateSingleOutput(3, 1, null);
                 return true;
 
             case ApiIds.RuntimeLog:
@@ -920,7 +926,7 @@ public static class RiscVExecutionBridge
                     var msgBytes = ReadItemBytes(input[0]);
                     host.Logs.Add(Encoding.UTF8.GetString(msgBytes));
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.RuntimeNotify:
@@ -966,84 +972,82 @@ public static class RiscVExecutionBridge
                         Args = args,
                     });
                 }
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
 
             case ApiIds.RuntimeGetTrigger:
                 // TriggerType.Application = 0x40
-                WriteOutputSingle(output, 0, 0x40, null);
+                output = CreateSingleOutput(0, 0x40, null);
                 return true;
 
             case ApiIds.RuntimeGetNetwork:
-                WriteOutputSingle(output, 0, 860833102, null);
+                output = CreateSingleOutput(0, 860833102, null);
                 return true;
 
             case ApiIds.RuntimeGetAddressVersion:
-                WriteOutputSingle(output, 0, 53, null);
+                output = CreateSingleOutput(0, 53, null);
                 return true;
 
             case ApiIds.RuntimeGetTime:
-                WriteOutputSingle(output, 0, 0, null);
+                output = CreateSingleOutput(0, 0, null);
                 return true;
 
             case ApiIds.RuntimeGasLeft:
-                WriteOutputSingle(output, 0, 10_000_000_000_000L, null);
+                output = CreateSingleOutput(0, 10_000_000_000_000L, null);
                 return true;
 
             case ApiIds.RuntimePlatform:
                 var platBytes = Encoding.UTF8.GetBytes("NEO");
-                WriteOutputSingle(output, 1, 0, platBytes);
+                output = CreateSingleOutput(1, 0, platBytes);
                 return true;
 
             case ApiIds.RuntimeGetExecutingScriptHash:
             case ApiIds.RuntimeGetCallingScriptHash:
             case ApiIds.RuntimeGetEntryScriptHash:
                 // Return 20 zero bytes as a script hash
-                WriteOutputSingle(output, 1, 0, new byte[20]);
+                output = CreateSingleOutput(1, 0, new byte[20]);
                 return true;
 
             // --- Iterator syscalls ---
             case ApiIds.IteratorNext:
-                // Return false (no more items)
-                WriteOutputSingle(output, 3, 0, null);
+                output = CreateSingleOutput(3, 0, null);
                 return true;
 
             case ApiIds.IteratorValue:
-                WriteOutputSingle(output, 2, 0, null);
+                output = CreateSingleOutput(2, 0, null);
                 return true;
 
             default:
                 // Unknown syscall — return empty to avoid fault
-                WriteOutputEmpty(output);
+                output = CreateEmptyOutput();
                 return true;
         }
+
     }
 
     /// <summary>
     /// Free callback for memory allocated by TestHostCallbackImpl.
     /// </summary>
-    private static void TestHostFreeImpl(IntPtr userData, IntPtr result)
+    private static void TestHostFreeImpl(IntPtr userData, ref NativeHostResult result)
     {
-        if (result == IntPtr.Zero) return;
-
-        var nativeResult = Marshal.PtrToStructure<NativeHostResult>(result);
-
         // Free the stack items and their byte arrays
-        if (nativeResult.StackPtr != IntPtr.Zero && nativeResult.StackLen > 0)
+        if (result.StackPtr != IntPtr.Zero && result.StackLen > 0)
         {
             var itemSize = Marshal.SizeOf<NativeStackItem>();
-            for (var i = 0; i < (int)nativeResult.StackLen; i++)
+            for (var i = 0; i < (int)result.StackLen; i++)
             {
-                var itemPtr = IntPtr.Add(nativeResult.StackPtr, i * itemSize);
+                var itemPtr = IntPtr.Add(result.StackPtr, i * itemSize);
                 var item = Marshal.PtrToStructure<NativeStackItem>(itemPtr);
                 if (item.BytesPtr != IntPtr.Zero)
                     Marshal.FreeHGlobal(item.BytesPtr);
             }
-            Marshal.FreeHGlobal(nativeResult.StackPtr);
+            Marshal.FreeHGlobal(result.StackPtr);
         }
 
-        if (nativeResult.ErrorPtr != IntPtr.Zero)
-            Marshal.FreeHGlobal(nativeResult.ErrorPtr);
+        if (result.ErrorPtr != IntPtr.Zero)
+            Marshal.FreeHGlobal(result.ErrorPtr);
+
+        result = default;
     }
 
     /// <summary>

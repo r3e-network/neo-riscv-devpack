@@ -417,8 +417,8 @@ internal sealed class RiscvVmRunner : IDisposable
             "Boolean" => new NativeStackItem { Kind = 3, IntegerValue = item["value"]!.Value<bool>() ? 1 : 0 },
             "Integer" => new NativeStackItem { Kind = 0, IntegerValue = item["value"]!.Value<long>() },
             "ByteString" => CreateByteStringItem(ParseByteStringToken(item["value"])),
-            "Buffer" => CreateByteStringItem(ParseByteStringToken(item["value"])),
-            "Pointer" => new NativeStackItem { Kind = 0, IntegerValue = item["value"]!.Value<int>() },
+            "Buffer" => CreateBufferItem(ParseByteStringToken(item["value"])),
+            "Pointer" => new NativeStackItem { Kind = 10, IntegerValue = item["value"]!.Value<int>() },
             "Array" => CreateArrayLikeItem(4, (JArray)item["value"]!),
             "Struct" => CreateArrayLikeItem(7, (JArray)item["value"]!),
             "Map" => CreateMapItem((JObject)item["value"]!),
@@ -442,6 +442,23 @@ internal sealed class RiscvVmRunner : IDisposable
         return new NativeStackItem
         {
             Kind = 1,
+            IntegerValue = 0,
+            BytesPtr = bytesPtr,
+            BytesLen = (nuint)bytes.Length
+        };
+    }
+
+    private static NativeStackItem CreateBufferItem(byte[] bytes)
+    {
+        var bytesPtr = bytes.Length == 0 ? IntPtr.Zero : Marshal.AllocHGlobal(bytes.Length);
+        if (bytes.Length > 0)
+        {
+            Marshal.Copy(bytes, 0, bytesPtr, bytes.Length);
+        }
+
+        return new NativeStackItem
+        {
+            Kind = 11,
             IntegerValue = 0,
             BytesPtr = bytesPtr,
             BytesLen = (nuint)bytes.Length
@@ -551,6 +568,7 @@ internal sealed class RiscvVmRunner : IDisposable
         {
             0 => new JObject { ["type"] = "Integer", ["value"] = item.IntegerValue.ToString() },
             1 => new JObject { ["type"] = "ByteString", ["value"] = ByteArrayToHex(ReadBytes(item.BytesPtr, item.BytesLen)) },
+            11 => new JObject { ["type"] = "Buffer", ["value"] = ByteArrayToHex(ReadBytes(item.BytesPtr, item.BytesLen)) },
             2 => new JObject { ["type"] = "Null" },
             3 => new JObject { ["type"] = "Boolean", ["value"] = item.IntegerValue != 0 },
             4 => new JObject { ["type"] = "Array", ["value"] = new JArray(ReadStackAsJson(item.BytesPtr, item.BytesLen)) },

@@ -198,7 +198,19 @@ internal class NeoVmToRustTranslator
             {
                 ushort token = BinaryPrimitives.ReadUInt16LittleEndian(instr.Operand!);
                 uint calltHash = 0x43540000u | token;
-                return $"ctx.syscall(0x{calltHash:x8}); {advance}";
+                if (nextOffset >= 0)
+                    return $"bridge_syscall(ctx, 0x{calltHash:x8}); {advance}";
+                return $"bridge_syscall(ctx, 0x{calltHash:x8}); return;";
+            }
+
+            case OpCode.SYSCALL:
+            {
+                string code = InstructionTranslator.Translate(instr)!;
+                if (!code.Contains("ctx.syscall(", StringComparison.Ordinal))
+                    return $"{code} {advance}";
+                if (nextOffset >= 0)
+                    return $"_pc = {nextOffset}; {code}";
+                return $"{code} return;";
             }
 
             case OpCode.TRY:

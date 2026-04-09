@@ -20,8 +20,7 @@ namespace Neo.SmartContract.RiscV
     public sealed class RiscvApplicationEngine : ApplicationEngine
     {
         private const string TraceEnvironmentVariable = "NEO_RISCV_TRACE_ENGINE";
-        private static readonly FieldInfo StrictModeField = typeof(Script).GetField("_strictMode", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Unable to locate Neo.VM.Script strict mode field.");
+        private static readonly FieldInfo? StrictModeField = typeof(Script).GetField("_strictMode", BindingFlags.Instance | BindingFlags.NonPublic);
 
         private readonly IRiscvVmBridge _bridge;
         private bool _neoVMOnly;
@@ -143,7 +142,8 @@ namespace Neo.SmartContract.RiscV
             if (result.State == VMState.HALT)
             {
                 CurrentContext?.GetState<ExecutionContextState>().SnapshotCache?.Commit();
-                InvocationStack.Clear();
+                while (InvocationStack.Count > 0)
+                    InvocationStack.Pop();
             }
 
             FaultException = result.FaultException;
@@ -161,7 +161,8 @@ namespace Neo.SmartContract.RiscV
 
         private static bool IsStrictMode(Script script)
         {
-            return (bool)StrictModeField.GetValue(script)!;
+            if (StrictModeField is null) return true; // Safe default
+            return (bool)(StrictModeField.GetValue(script) ?? true);
         }
     }
 }

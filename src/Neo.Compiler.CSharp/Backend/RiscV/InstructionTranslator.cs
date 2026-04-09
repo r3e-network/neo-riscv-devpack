@@ -134,12 +134,12 @@ internal static class InstructionTranslator
 
             // ---- Syscall / CallT ----
             case OpCode.SYSCALL:
-                return $"ctx.syscall(0x{BinaryPrimitives.ReadUInt32LittleEndian(instr.Operand!):x8});";
+                return TranslateSyscall(BinaryPrimitives.ReadUInt32LittleEndian(instr.Operand!));
             case OpCode.CALLT:
             {
                 ushort token = BinaryPrimitives.ReadUInt16LittleEndian(instr.Operand!);
                 uint calltHash = 0x43540000u | token;
-                return $"ctx.syscall(0x{calltHash:x8});";
+                return $"bridge_syscall(ctx, 0x{calltHash:x8});";
             }
 
             // ---- Stack manipulation ----
@@ -354,7 +354,7 @@ internal static class InstructionTranslator
             case OpCode.NEWARRAY:
                 return "ctx.new_array();";
             case OpCode.NEWARRAY_T:
-                return $"ctx.new_array_t(0x{instr.Operand![0]:x2});";
+                return $"ctx.new_array_t(0x{TranslateStackItemTypeOperand(instr.Operand![0]):x2});";
             case OpCode.NEWSTRUCT0:
                 return "ctx.new_struct0();";
             case OpCode.NEWSTRUCT:
@@ -388,13 +388,37 @@ internal static class InstructionTranslator
             case OpCode.ISNULL:
                 return "ctx.is_null();";
             case OpCode.ISTYPE:
-                return $"ctx.is_type(0x{instr.Operand![0]:x2});";
+                return $"ctx.is_type(0x{TranslateStackItemTypeOperand(instr.Operand![0]):x2});";
             case OpCode.CONVERT:
-                return $"ctx.convert(0x{instr.Operand![0]:x2});";
+                return $"ctx.convert(0x{TranslateStackItemTypeOperand(instr.Operand![0]):x2});";
 
             default:
                 return $"ctx.fault(\"unsupported opcode: {instr.OpCode}\");";
         }
+    }
+
+    /// <summary>
+    /// Preserves NeoVM stack item type operands in generated Rust so the
+    /// runtime sees the canonical VM type bytes.
+    /// </summary>
+    private static byte TranslateStackItemTypeOperand(byte stackItemType)
+    {
+        return stackItemType;
+    }
+
+    /// <summary>
+    /// Inlines the current storage-context sentinel behavior instead of
+    /// routing these helpers through the generic syscall bridge.
+    /// </summary>
+    private static string TranslateSyscall(uint hash)
+    {
+        return hash switch
+        {
+            0xCE67F69B => "ctx.push_int(0);",
+            0xE26BB4F6 => "ctx.push_int(0);",
+            0xE9BF4C76 => "// Storage.AsReadOnly is a no-op for sentinel storage contexts.",
+            _ => $"bridge_syscall(ctx, 0x{hash:x8});"
+        };
     }
 
     /// <summary>

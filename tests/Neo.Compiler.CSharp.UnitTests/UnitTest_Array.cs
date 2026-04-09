@@ -26,9 +26,8 @@ namespace Neo.Compiler.CSharp.UnitTests
         [TestMethod]
         public void Test_GetTreeByteLengthPrefix()
         {
-            using var fee = Engine.CreateGasWatcher();
             var result = Contract.GetTreeByteLengthPrefix();
-            Assert.AreEqual(1784760, fee.Value);
+            AssertGasConsumed(1784760);
 
             CollectionAssert.AreEqual(new byte[] { 0x01, 0x03 }, result);
         }

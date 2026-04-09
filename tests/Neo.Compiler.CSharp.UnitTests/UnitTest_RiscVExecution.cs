@@ -35,6 +35,26 @@ public class UnitTest_RiscVExecution
     private static bool s_runtimeAvailable;
     private static bool s_contractsBuilt;
 
+    private static RiscVExecutionBridge.ResultStackItem IntegerArg(long value) => new()
+    {
+        Kind = 0,
+        IntegerValue = value,
+    };
+
+    private static RiscVExecutionBridge.ResultStackItem ByteStringArg(string value) => new()
+    {
+        Kind = 1,
+        Bytes = System.Text.Encoding.UTF8.GetBytes(value),
+    };
+
+    private static RiscVExecutionBridge.ExecutionResult ExecuteWithArgs(
+        byte[] binary,
+        string method,
+        params RiscVExecutionBridge.ResultStackItem[] args)
+    {
+        return RiscVExecutionBridge.ExecuteWithHost(binary, method, args, null);
+    }
+
     [ClassInitialize]
     public static void ClassInit(TestContext _)
     {
@@ -234,11 +254,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Math");
-        var result = RiscVExecutionBridge.Execute(binary, "max");
+        var result = ExecuteWithArgs(binary, "max", IntegerArg(1), IntegerArg(2));
         Assert.IsTrue(result.IsHalt,
             $"max: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(2L, result.Stack[0].IntegerValue, "max(1, 2) should return 2.");
     }
 
     [TestMethod]
@@ -246,11 +267,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Math");
-        var result = RiscVExecutionBridge.Execute(binary, "min");
+        var result = ExecuteWithArgs(binary, "min", IntegerArg(1), IntegerArg(2));
         Assert.IsTrue(result.IsHalt,
             $"min: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(1L, result.Stack[0].IntegerValue, "min(1, 2) should return 1.");
     }
 
     [TestMethod]
@@ -258,11 +280,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Math");
-        var result = RiscVExecutionBridge.Execute(binary, "abs");
+        var result = ExecuteWithArgs(binary, "abs", IntegerArg(-1));
         Assert.IsTrue(result.IsHalt,
             $"abs: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(1L, result.Stack[0].IntegerValue, "abs(-1) should return 1.");
     }
 
     // -----------------------------------------------------------
@@ -274,11 +297,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Concat");
-        var result = RiscVExecutionBridge.Execute(binary, "TestStringAdd1");
+        var result = ExecuteWithArgs(binary, "testStringAdd1", ByteStringArg("neo"));
         Assert.IsTrue(result.IsHalt,
-            $"TestStringAdd1: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"testStringAdd1: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(1u, result.Stack[0].Kind, "Result should be ByteString (kind=1).");
+        Assert.AreEqual("neohello", System.Text.Encoding.UTF8.GetString(result.Stack[0].Bytes!), "Concatenation result should match.");
     }
 
     // -----------------------------------------------------------
@@ -290,10 +314,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Switch");
-        var result = RiscVExecutionBridge.Execute(binary, "SwitchLong");
+        var result = ExecuteWithArgs(binary, "switchLong", ByteStringArg("20"));
         Assert.IsTrue(result.IsHalt,
-            $"SwitchLong: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"switchLong: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
+        Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(21L, result.Stack[0].IntegerValue, "switchLong(\"20\") should return 21.");
     }
 
     [TestMethod]
@@ -301,10 +327,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Switch");
-        var result = RiscVExecutionBridge.Execute(binary, "Switch6");
+        var result = ExecuteWithArgs(binary, "switch6", ByteStringArg("5"));
         Assert.IsTrue(result.IsHalt,
-            $"Switch6: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"switch6: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
+        Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(6L, result.Stack[0].IntegerValue, "switch6(\"5\") should return 6.");
     }
 
     // -----------------------------------------------------------
@@ -316,11 +344,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Integer");
-        var result = RiscVExecutionBridge.Execute(binary, "IsEvenIntegerInt");
+        var result = ExecuteWithArgs(binary, "isEvenIntegerInt", IntegerArg(4));
         Assert.IsTrue(result.IsHalt,
-            $"IsEvenIntegerInt: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"isEvenIntegerInt: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(3u, result.Stack[0].Kind, "Result should be Boolean (kind=3).");
+        Assert.AreEqual(1L, result.Stack[0].IntegerValue, "isEvenIntegerInt(4) should return true.");
     }
 
     [TestMethod]
@@ -328,11 +357,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_Integer");
-        var result = RiscVExecutionBridge.Execute(binary, "IsPow2Int");
+        var result = ExecuteWithArgs(binary, "isPow2Int", IntegerArg(4));
         Assert.IsTrue(result.IsHalt,
-            $"IsPow2Int: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"isPow2Int: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(3u, result.Stack[0].Kind, "Result should be Boolean (kind=3).");
+        Assert.AreEqual(1L, result.Stack[0].IntegerValue, "isPow2Int(4) should return true.");
     }
 
     // -----------------------------------------------------------
@@ -344,11 +374,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_BigInteger");
-        var result = RiscVExecutionBridge.Execute(binary, "testIsEven");
+        var result = ExecuteWithArgs(binary, "testIsEven", IntegerArg(2));
         Assert.IsTrue(result.IsHalt,
             $"testIsEven: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(3u, result.Stack[0].Kind, "Result should be Boolean (kind=3).");
+        Assert.AreEqual(1L, result.Stack[0].IntegerValue, "testIsEven(2) should return true.");
     }
 
     [TestMethod]
@@ -356,11 +387,12 @@ public class UnitTest_RiscVExecution
     {
         RequireRuntime();
         var binary = LoadBinaryOrSkip("Contract_BigInteger");
-        var result = RiscVExecutionBridge.Execute(binary, "TestAdd");
+        var result = ExecuteWithArgs(binary, "testAdd", IntegerArg(123456789), IntegerArg(987654321));
         Assert.IsTrue(result.IsHalt,
-            $"TestAdd: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"testAdd: Expected HALT but got state={result.State}. Error: {result.Error}");
         Assert.AreEqual(1, result.Stack.Length, "Should return one item.");
         Assert.AreEqual(0u, result.Stack[0].Kind, "Result should be Integer (kind=0).");
+        Assert.AreEqual(1111111110L, result.Stack[0].IntegerValue, "testAdd should return the sum.");
     }
 
     // -----------------------------------------------------------
@@ -423,12 +455,16 @@ public class UnitTest_RiscVExecution
         };
         var result = host.Execute(binary, "safeUpdate", initialArgs);
 
+        var apiDump = string.Join(", ", host.CalledApis.Select(a => $"0x{a:X8}"));
+
         Assert.IsTrue(result.IsHalt,
-            $"SafeUpdate: Expected HALT but got state={result.State}. Error: {result.Error}");
+            $"SafeUpdate: Expected HALT but got state={result.State}. Error: {result.Error}. CalledApis=[{apiDump}]");
 
         // Verify storage was populated
-        Assert.AreEqual(1, host.Storage.Count, "Storage should have one entry after SafeUpdate.");
-        Assert.IsTrue(host.Storage.ContainsKey(key), "Storage should contain the safekey.");
+        Assert.AreEqual(1, host.Storage.Count,
+            $"Storage should have one entry after SafeUpdate. CalledApis=[{apiDump}]");
+        Assert.IsTrue(host.Storage.ContainsKey(key),
+            $"Storage should contain the safekey. CalledApis=[{apiDump}]");
     }
 
     // -----------------------------------------------------------

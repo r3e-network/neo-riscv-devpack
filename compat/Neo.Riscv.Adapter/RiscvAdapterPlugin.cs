@@ -19,6 +19,7 @@ namespace Neo.SmartContract.RiscV
     {
         public override string Name => "Neo.Riscv.Adapter";
         public override string Description => "RISC-V VM adapter for Neo smart contract execution via PolkaVM.";
+        protected internal override UnhandledExceptionPolicy ExceptionPolicy => UnhandledExceptionPolicy.StopPlugin;
 
         public RiscvAdapterPlugin()
         {

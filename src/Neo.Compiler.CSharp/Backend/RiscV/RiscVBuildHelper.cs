@@ -35,9 +35,9 @@ public static class RiscVBuildHelper
             var targetJson = Path.Combine(Path.GetTempPath(), "neo-riscv32-polkavm.json");
             FixTargetJson(origTargetJson!, targetJson);
 
-            // Build with -Zjson-target-spec for .json target files
+            // Newer nightly toolchains accept JSON target paths directly.
             var buildResult = RunCommand("cargo",
-                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc -Zjson-target-spec",
+                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc",
                 workingDir: crateDir);
             if (buildResult == null) return false;
 
@@ -74,11 +74,10 @@ public static class RiscVBuildHelper
                 ? cargoBin + Path.PathSeparator + currentPath
                 : currentPath;
 
-            // Use bash so the child sees the updated PATH
             var psi = new ProcessStartInfo
             {
-                FileName = "/bin/bash",
-                Arguments = $"-c \"{command} {args.Replace("\"", "\\\"")}\"",
+                FileName = command,
+                Arguments = args,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

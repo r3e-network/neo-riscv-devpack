@@ -486,8 +486,8 @@ namespace Neo.SmartContract.Testing
                 return MockContract(hash, null, customMock);
             }
 
-            var state = Native.ContractManagement.GetContract(hash)
-                ?? throw new Exception($"The contract {hash} does not exist.");
+            var state = NativeContract.ContractManagement.GetContract(Storage.Snapshot, hash)
+                ?? throw new KeyNotFoundException($"The contract {hash} does not exist.");
 
             return MockContract(state.Hash, state.Id, customMock);
         }

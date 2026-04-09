@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="$(TargetPath)">
+    <Content Include="$(TargetPath)" Condition="Exists('$(TargetPath)')">
       <Link>Plugins\Neo.Riscv.Adapter\Neo.Riscv.Adapter.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

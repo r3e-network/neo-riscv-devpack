@@ -26,7 +26,7 @@ namespace Neo.SmartContract.RiscV
     {
         public const string LibraryPathEnvironmentVariable = "NEO_RISCV_HOST_LIB";
         private const string TraceEnvironmentVariable = "NEO_RISCV_TRACE_HOST";
-        private static readonly byte[] StorageContextTokenMagic = [0x4E, 0x52, 0x53, 0x43];
+        private static readonly byte[] StorageContextTokenMagic = [0x4E, 0x52, 0x53, 0x43, 0xFF, 0xFE, 0x01, 0x00];
 
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeExecutionResult
@@ -146,8 +146,8 @@ namespace Neo.SmartContract.RiscV
         private readonly IntPtr _hostCallbackPtr;
         private readonly IntPtr _hostFreeCallbackPtr;
 
-        private static bool TraceEnabled =>
-            string.Equals(Environment.GetEnvironmentVariable(TraceEnvironmentVariable), "1", StringComparison.Ordinal);
+        private static readonly bool TraceEnabled =
+            string.Equals(Environment.GetEnvironmentVariable(TraceEnvironmentVariable), "1", StringComparison.OrdinalIgnoreCase);
 
         public NativeRiscvVmBridge(string libraryPath)
         {
@@ -769,7 +769,7 @@ namespace Neo.SmartContract.RiscV
             if (inputStack.Length < 2)
                 throw new InvalidOperationException("Storage.Get requires context and key.");
 
-            var context = ParseStorageContext(inputStack[^2]);
+            var context = ParseStorageContext(request, inputStack[^2]);
             if (inputStack[^1] is not ByteString key)
                 throw new InvalidOperationException("Storage.Get requires a byte string key.");
 
@@ -826,7 +826,7 @@ namespace Neo.SmartContract.RiscV
             if (inputStack.Length == 0)
                 throw new InvalidOperationException("Storage.AsReadOnly requires one argument.");
 
-            var context = ParseStorageContext(inputStack[^1]);
+            var context = ParseStorageContext(request, inputStack[^1]);
             var next = new StackItem[inputStack.Length];
             if (inputStack.Length > 1)
             {
@@ -841,7 +841,7 @@ namespace Neo.SmartContract.RiscV
             if (inputStack.Length < 3)
                 throw new InvalidOperationException("Storage.Put requires context, key, and value.");
 
-            var context = ParseStorageContext(inputStack[^3]);
+            var context = ParseStorageContext(request, inputStack[^3]);
             if (inputStack[^2] is not ByteString key)
                 throw new InvalidOperationException("Storage.Put requires a byte string key.");
             if (inputStack[^1] is not ByteString value)
@@ -882,7 +882,7 @@ namespace Neo.SmartContract.RiscV
             if (inputStack.Length < 2)
                 throw new InvalidOperationException("Storage.Delete requires context and key.");
 
-            var context = ParseStorageContext(inputStack[^2]);
+            var context = ParseStorageContext(request, inputStack[^2]);
             if (inputStack[^1] is not ByteString key)
                 throw new InvalidOperationException("Storage.Delete requires a byte string key.");
 
@@ -919,7 +919,7 @@ namespace Neo.SmartContract.RiscV
             if (inputStack.Length < 3)
                 throw new InvalidOperationException("Storage.Find requires context, prefix, and options.");
 
-            var context = ParseStorageContext(inputStack[^3]);
+            var context = ParseStorageContext(request, inputStack[^3]);
             if (inputStack[^2] is not ByteString prefix)
                 throw new InvalidOperationException("Storage.Find requires a byte string prefix.");
             if (inputStack[^1] is not Integer options)
@@ -969,8 +969,18 @@ namespace Neo.SmartContract.RiscV
             return next;
         }
 
-        private static StorageContext ParseStorageContext(StackItem item)
+        private static StorageContext ParseStorageContext(RiscvExecutionRequest request, StackItem item)
         {
+            if (item is Integer sentinel)
+            {
+                // The RISC-V side treats storage contexts as opaque handles in some
+                // paths. Accept the current sentinel contract here so native guest
+                // code and host-side adapter code can interoperate.
+                return sentinel.GetInteger() == 1
+                    ? request.Engine.GetReadOnlyContext()
+                    : request.Engine.GetStorageContext();
+            }
+
             if (item is ByteString encoded && TryParseStorageContextToken(encoded.GetSpan(), out var encodedContext))
                 return encodedContext;
 
@@ -1755,7 +1765,7 @@ namespace Neo.SmartContract.RiscV
 
         private static NativeHostResult CreateNativeHostError(Exception exception)
         {
-            var payload = string.Join("\n", new[]
+            var payload = string.Join("\x1F", new[]
             {
                 exception.GetType().FullName ?? typeof(InvalidOperationException).FullName!,
                 exception.Message,
@@ -1780,15 +1790,15 @@ namespace Neo.SmartContract.RiscV
 
         private static Exception RehydrateNativeException(string payload)
         {
-            // Split on newline - inner messages may contain newlines so join parts[3..]
-            var parts = payload.Split('\n');
+            // Split on Unit Separator (0x1F) - avoids collisions with newlines in exception messages
+            var parts = payload.Split('\x1F');
             if (parts.Length < 4)
             {
                 return new InvalidOperationException(payload);
             }
 
             var innerMessage = parts.Length > 4
-                ? string.Join("\n", parts[3..])
+                ? string.Join("\x1F", parts[3..])
                 : parts[3];
             Exception? inner = string.IsNullOrEmpty(parts[2]) ? null : CreateException(parts[2], innerMessage);
             if (parts[0] == typeof(System.Reflection.TargetInvocationException).FullName && inner is not null)

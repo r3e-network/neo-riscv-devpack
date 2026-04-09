@@ -236,65 +236,35 @@ internal class RiscVEmitter : ICodeEmitter
         _builder.Line($"// {riscVLabel.Name}:");
     }
 
-    public void Emit_Jump(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump {riscVLabel.Name}");
-    }
+    public void Emit_Jump(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpIf(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_if {riscVLabel.Name}");
-    }
+    public void Emit_JumpIf(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpIfNot(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_if_not {riscVLabel.Name}");
-    }
+    public void Emit_JumpIfNot(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpEq(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_eq {riscVLabel.Name}");
-    }
+    public void Emit_JumpEq(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpNe(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_ne {riscVLabel.Name}");
-    }
+    public void Emit_JumpNe(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpGt(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_gt {riscVLabel.Name}");
-    }
+    public void Emit_JumpGt(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpGe(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_ge {riscVLabel.Name}");
-    }
+    public void Emit_JumpGe(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpLt(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_lt {riscVLabel.Name}");
-    }
+    public void Emit_JumpLt(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Emit_JumpLe(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// jump_le {riscVLabel.Name}");
-    }
+    public void Emit_JumpLe(ILabel target) =>
+        throw new NotSupportedException("Direct jump emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
-    public void Call(ILabel target)
-    {
-        var riscVLabel = (RiscVLabel)target;
-        _builder.Line($"// call {riscVLabel.Name}");
-    }
+    public void Call(ILabel target) =>
+        throw new NotSupportedException("Direct call emission not supported in RISC-V backend. Use NeoVmToRustTranslator for control flow.");
 
     public void Ret() => _builder.Line("ctx.ret();");
     public void Throw() => _builder.Line("ctx.throw_ex();");
@@ -326,13 +296,24 @@ internal class RiscVEmitter : ICodeEmitter
 
     public void Syscall(uint hash)
     {
-        _builder.Line($"ctx.syscall(0x{hash:x8});");
+        _builder.Line(TranslateSyscall(hash));
     }
 
     public void CallToken(ushort token)
     {
         uint calltHash = 0x43540000u | token;
-        _builder.Line($"ctx.syscall(0x{calltHash:x8});");
+        _builder.Line($"bridge_syscall(ctx, 0x{calltHash:x8});");
+    }
+
+    private static string TranslateSyscall(uint hash)
+    {
+        return hash switch
+        {
+            0xCE67F69B => "ctx.push_int(0);",
+            0xE26BB4F6 => "ctx.push_int(0);",
+            0xE9BF4C76 => "// Storage.AsReadOnly is a no-op for sentinel storage contexts.",
+            _ => $"bridge_syscall(ctx, 0x{hash:x8});"
+        };
     }
 
     #endregion
@@ -368,7 +349,8 @@ internal class RiscVEmitter : ICodeEmitter
     }
 
     public void Unpack() => _builder.Line("ctx.unpack();");
-    public void DeepCopy() => _builder.Line("// deep_copy: not yet supported in RISC-V backend");
+    public void DeepCopy() =>
+        throw new NotSupportedException("DeepCopy not yet supported in RISC-V backend.");
     public void ReverseItems() => _builder.Line("ctx.reverse_items();");
     public void ClearItems() => _builder.Line("ctx.clear_items();");
     public void PopItem() => _builder.Line("ctx.pop_item();");

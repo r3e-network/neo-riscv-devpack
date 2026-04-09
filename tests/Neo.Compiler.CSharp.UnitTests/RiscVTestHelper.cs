@@ -22,8 +22,10 @@ namespace Neo.Compiler.CSharp.UnitTests;
 /// </summary>
 public static class RiscVTestHelper
 {
+    private const string RiscvVmRootEnvironmentVariable = "NEO_RISCV_VM_ROOT";
     private static readonly string OutputDir = Path.Combine(Path.GetTempPath(), "neo-riscv-test-contracts");
     private static readonly ConcurrentDictionary<string, string?> _cache = new();
+    private static readonly ConcurrentDictionary<string, object> _buildLocks = new();
     private static bool _initialized;
 
     /// <summary>
@@ -130,8 +132,15 @@ public static class RiscVTestHelper
             return polkavmPath;
 
         // 3. Build on-the-fly (slow)
-        if (!BuildCrate(crateDir))
-            return null;
+        var buildLock = _buildLocks.GetOrAdd(crateDir, static _ => new object());
+        lock (buildLock)
+        {
+            if (File.Exists(polkavmPath))
+                return polkavmPath;
+
+            if (!BuildCrate(crateDir))
+                return null;
+        }
 
         return File.Exists(polkavmPath) ? polkavmPath : null;
     }
@@ -156,9 +165,9 @@ public static class RiscVTestHelper
             var targetJson = Path.Combine(Path.GetTempPath(), "neo-riscv32-polkavm.json");
             FixTargetJson(origTargetJson!, targetJson);
 
-            // Build with -Zjson-target-spec for .json target files
+            // Newer nightly toolchains accept JSON target paths directly.
             var buildResult = RunCommand("cargo",
-                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc -Zjson-target-spec",
+                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc",
                 stderr: out var cargoStderr);
             if (buildResult == null)
             {
@@ -261,30 +270,66 @@ public static class RiscVTestHelper
 
     private static string? FindRiscvVmRoot()
     {
-        // Walk up from current directory to find neo-riscv-vm
-        var dir = Directory.GetCurrentDirectory();
-        while (dir != null)
+        var configuredRoot = Environment.GetEnvironmentVariable(RiscvVmRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
         {
-            if (Directory.Exists(Path.Combine(dir, "crates", "neo-riscv-rt")))
-                return dir;
-            dir = Path.GetDirectoryName(dir);
+            var resolvedRoot = Path.GetFullPath(configuredRoot);
+            if (HasRiscvVmCrates(resolvedRoot))
+                return resolvedRoot;
         }
 
-        // Check common sibling locations
-        var siblingLocations = new[]
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
-            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..", "neo-riscv-vm")),
-            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "neo-riscv-vm")),
+            var resolvedRoot = FindRiscvVmRootFrom(start);
+            if (resolvedRoot is not null)
+                return resolvedRoot;
+        }
+
+        var legacyFallbacks = new[]
+        {
             "/home/neo/git/neo-riscv-vm",
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "git", "neo-riscv-vm"),
         };
 
-        foreach (var candidate in siblingLocations)
+        foreach (var candidate in legacyFallbacks)
         {
-            if (Directory.Exists(Path.Combine(candidate, "crates", "neo-riscv-rt")))
-                return candidate;
+            var resolvedRoot = Path.GetFullPath(candidate);
+            if (HasRiscvVmCrates(resolvedRoot))
+                return resolvedRoot;
         }
 
         return null;
+    }
+
+    private static string? FindRiscvVmRootFrom(string start)
+    {
+        var dir = Path.GetFullPath(start);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (HasRiscvVmCrates(dir))
+                return dir;
+
+            var nestedCandidate = Path.Combine(dir, "neo-riscv-vm");
+            if (HasRiscvVmCrates(nestedCandidate))
+                return nestedCandidate;
+
+            var parent = Path.GetDirectoryName(dir);
+            if (string.IsNullOrEmpty(parent))
+                break;
+
+            var siblingCandidate = Path.Combine(parent, "neo-riscv-vm");
+            if (HasRiscvVmCrates(siblingCandidate))
+                return siblingCandidate;
+
+            dir = parent;
+        }
+
+        return null;
+    }
+
+    private static bool HasRiscvVmCrates(string path)
+    {
+        return Directory.Exists(Path.Combine(path, "crates", "neo-riscv-rt")) &&
+            Directory.Exists(Path.Combine(path, "crates", "neo-riscv-contract-harness"));
     }
 }
