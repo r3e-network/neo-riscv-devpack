@@ -86,6 +86,20 @@ public class UnitTest_RiscVParity
 
     [TestMethod]
     [TestCategory("RiscV")]
+    public void RiscVTarget_EmitsManifestVmMarker()
+    {
+        foreach (var ctx in _riscvContexts!.Where(c => c.Success))
+        {
+            var manifest = ctx.CreateManifest();
+
+            Assert.IsNotNull(manifest.Extra, $"{ctx.ContractName}: missing manifest extra");
+            Assert.AreEqual("riscv32-polkavm-v1", manifest.Extra!["vm"]!.AsString(),
+                $"{ctx.ContractName}: missing RISC-V VM marker");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("RiscV")]
     public void KeyContracts_GenerateValidRustStructure()
     {
         var missing = new List<string>();

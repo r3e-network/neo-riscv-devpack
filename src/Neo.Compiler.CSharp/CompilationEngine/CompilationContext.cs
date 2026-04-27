@@ -48,6 +48,7 @@ namespace Neo.Compiler
         private readonly PermissionBuilder _permissions = new();
         private readonly HashSet<string> _trusts = new();
         private readonly JObject _manifestExtra = new();
+        private const string RiscVManifestVmMarker = "riscv32-polkavm-v1";
         // We can not reuse these converted methods as the offsets are determined while converting
         private readonly MethodConvertCollection _methodsConverted = new();
         private readonly MethodConvertCollection _methodsForward = new();
@@ -269,6 +270,9 @@ namespace Neo.Compiler
 
         public ContractManifest CreateManifest()
         {
+            if (Options.Target == CompilationTarget.RiscV)
+                _manifestExtra["vm"] = RiscVManifestVmMarker;
+
             // Check if we need to add the version from the project file
             string? versionKey = ManifestExtraAttribute.AttributeType[nameof(ContractVersionAttribute)];
             if (!_manifestExtra.ContainsProperty(versionKey))
