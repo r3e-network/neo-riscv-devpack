@@ -13,6 +13,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Neo.Compiler.Backend.RiscV;
 using Neo.SmartContract;
 using Neo.VM;
+using System;
 
 namespace Neo.Compiler.CSharp.UnitTests;
 
@@ -43,6 +44,53 @@ public class UnitTest_RiscVTarget
         Assert.IsTrue(rustSource.Contains("ctx.convert(0x02);"));
         Assert.IsTrue(rustSource.Contains("ctx.ret();"));
         Assert.IsTrue(rustSource.Contains("\"balanceOf\" => method_balanceof(ctx)"));
+        Assert.IsTrue(rustSource.Contains("pub extern \"C\" fn execute_method(method_id: u32, stack_ptr: u32, stack_len: u32)"));
+        Assert.IsTrue(rustSource.Contains("fn dispatch_by_id(ctx: &mut Context, method_id: u32)"));
+    }
+
+    [TestMethod]
+    public void TestRiscVEmitter_RoutesStorageContextSyscallsThroughBridge()
+    {
+        var emitter = new RiscVEmitter();
+        emitter.BeginMethod("storage", 0, 0);
+        emitter.Syscall(ApplicationEngine.System_Storage_GetContext.Hash);
+        emitter.Syscall(ApplicationEngine.System_Storage_GetReadOnlyContext.Hash);
+        emitter.Syscall(ApplicationEngine.System_Storage_AsReadOnly.Hash);
+        emitter.EndMethod();
+
+        var rustSource = emitter.Builder.Build("StorageContract");
+
+        Assert.IsTrue(rustSource.Contains($"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_GetContext.Hash:x8});"));
+        Assert.IsTrue(rustSource.Contains($"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_GetReadOnlyContext.Hash:x8});"));
+        Assert.IsTrue(rustSource.Contains($"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_AsReadOnly.Hash:x8});"));
+        Assert.IsFalse(rustSource.Contains("ctx.push_int(0);"));
+        Assert.IsFalse(rustSource.Contains("Storage.AsReadOnly is a no-op"));
+    }
+
+    [TestMethod]
+    public void TestInstructionTranslator_RoutesStorageContextSyscallsThroughBridge()
+    {
+        Assert.AreEqual(
+            $"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_GetContext.Hash:x8});",
+            InstructionTranslator.Translate(new Instruction
+            {
+                OpCode = OpCode.SYSCALL,
+                Operand = BitConverter.GetBytes(ApplicationEngine.System_Storage_GetContext.Hash),
+            }));
+        Assert.AreEqual(
+            $"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_GetReadOnlyContext.Hash:x8});",
+            InstructionTranslator.Translate(new Instruction
+            {
+                OpCode = OpCode.SYSCALL,
+                Operand = BitConverter.GetBytes(ApplicationEngine.System_Storage_GetReadOnlyContext.Hash),
+            }));
+        Assert.AreEqual(
+            $"bridge_syscall(ctx, 0x{ApplicationEngine.System_Storage_AsReadOnly.Hash:x8});",
+            InstructionTranslator.Translate(new Instruction
+            {
+                OpCode = OpCode.SYSCALL,
+                Operand = BitConverter.GetBytes(ApplicationEngine.System_Storage_AsReadOnly.Hash),
+            }));
     }
 
     [TestMethod]
@@ -85,5 +133,13 @@ public class UnitTest_RiscVTarget
         CollectionAssert.AreEqual(polkaVmBinary, deployable.Script.ToArray());
         Assert.AreEqual(NefFile.ComputeChecksum(deployable), deployable.CheckSum);
         Assert.AreNotEqual(source.CheckSum, deployable.CheckSum);
+    }
+
+    [TestMethod]
+    public void RunCommandPreservesArgumentBoundaries()
+    {
+        var output = RiscVBuildHelper.RunCommand("printf", ["%s", "hello world"]);
+
+        Assert.AreEqual("hello world", output);
     }
 }

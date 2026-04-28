@@ -82,7 +82,7 @@ internal class RustCodeBuilder
         sb.AppendLine();
         sb.AppendLine("use neo_riscv_rt::Context;");
         sb.AppendLine("use neo_riscv_rt::stack_value::StackValue;");
-        sb.AppendLine("use neo_riscv_contract_harness::{decode_entry, encode_result, bridge_syscall};");
+        sb.AppendLine("use neo_riscv_contract_harness::{decode_context, decode_entry, encode_result, bridge_syscall};");
         sb.AppendLine();
 
         // Allocator (simple bump allocator using a static arena)
@@ -151,6 +151,15 @@ internal class RustCodeBuilder
         sb.AppendLine("static mut RESULT_BUF: [u8; MAX_RESULT_SIZE] = [0u8; MAX_RESULT_SIZE];");
         sb.AppendLine("static mut RESULT_LEN: u32 = 0;");
         sb.AppendLine();
+        sb.AppendLine("fn store_result(ctx: Context) {");
+        sb.AppendLine("    let result_bytes = encode_result(ctx);");
+        sb.AppendLine("    let len = result_bytes.len().min(MAX_RESULT_SIZE);");
+        sb.AppendLine("    unsafe {");
+        sb.AppendLine("        RESULT_BUF[..len].copy_from_slice(&result_bytes[..len]);");
+        sb.AppendLine("        RESULT_LEN = len as u32;");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        sb.AppendLine();
 
         // Entry points
         sb.AppendLine("// === PolkaVM entry points ===");
@@ -167,12 +176,20 @@ internal class RustCodeBuilder
         sb.AppendLine("    let method = core::str::from_utf8(&entry.method_name).unwrap_or(\"\");");
         sb.AppendLine("    let mut ctx = entry.ctx;");
         sb.AppendLine("    dispatch(&mut ctx, method);");
-        sb.AppendLine("    let result_bytes = encode_result(ctx);");
-        sb.AppendLine("    let len = result_bytes.len().min(MAX_RESULT_SIZE);");
-        sb.AppendLine("    unsafe {");
-        sb.AppendLine("        RESULT_BUF[..len].copy_from_slice(&result_bytes[..len]);");
-        sb.AppendLine("        RESULT_LEN = len as u32;");
-        sb.AppendLine("    }");
+        sb.AppendLine("    store_result(ctx);");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("#[polkavm_derive::polkavm_export]");
+        sb.AppendLine("pub extern \"C\" fn execute_method(method_id: u32, stack_ptr: u32, stack_len: u32) {");
+        sb.AppendLine("    // Register the syscall bridge before any contract code runs.");
+        sb.AppendLine("    neo_riscv_rt::set_syscall_bridge(bridge_syscall);");
+        sb.AppendLine();
+        sb.AppendLine("    let stack_data = unsafe {");
+        sb.AppendLine("        core::slice::from_raw_parts(stack_ptr as *const u8, stack_len as usize)");
+        sb.AppendLine("    };");
+        sb.AppendLine("    let mut ctx = decode_context(stack_data);");
+        sb.AppendLine("    dispatch_by_id(&mut ctx, method_id);");
+        sb.AppendLine("    store_result(ctx);");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("#[polkavm_derive::polkavm_export]");
@@ -207,6 +224,14 @@ internal class RustCodeBuilder
         sb.AppendLine("    match method {");
         foreach (var name in _methodNames)
             sb.AppendLine($"        \"{name}\" => method_{SanitizeName(name)}(ctx),");
+        sb.AppendLine("        _ => ctx.fault(\"Unknown method\"),");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("fn dispatch_by_id(ctx: &mut Context, method_id: u32) {");
+        sb.AppendLine("    match method_id {");
+        foreach (var name in _methodNames)
+            sb.AppendLine($"        0x{ComputeMethodId(name):x8} => method_{SanitizeName(name)}(ctx),");
         sb.AppendLine("        _ => ctx.fault(\"Unknown method\"),");
         sb.AppendLine("    }");
         sb.AppendLine("}");
@@ -249,4 +274,15 @@ internal class RustCodeBuilder
 
     internal static string SanitizeName(string name) =>
         name.Replace("-", "_").Replace(".", "_").ToLowerInvariant();
+
+    private static uint ComputeMethodId(string method)
+    {
+        uint hash = 2166136261;
+        foreach (var b in Encoding.UTF8.GetBytes(method))
+        {
+            hash ^= b;
+            hash *= 16777619;
+        }
+        return hash;
+    }
 }

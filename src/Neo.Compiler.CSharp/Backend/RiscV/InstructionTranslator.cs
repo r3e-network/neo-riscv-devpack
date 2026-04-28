@@ -406,19 +406,9 @@ internal static class InstructionTranslator
         return stackItemType;
     }
 
-    /// <summary>
-    /// Inlines the current storage-context sentinel behavior instead of
-    /// routing these helpers through the generic syscall bridge.
-    /// </summary>
     private static string TranslateSyscall(uint hash)
     {
-        return hash switch
-        {
-            0xCE67F69B => "ctx.push_int(0);",
-            0xE26BB4F6 => "ctx.push_int(0);",
-            0xE9BF4C76 => "// Storage.AsReadOnly is a no-op for sentinel storage contexts.",
-            _ => $"bridge_syscall(ctx, 0x{hash:x8});"
-        };
+        return $"bridge_syscall(ctx, 0x{hash:x8});";
     }
 
     /// <summary>

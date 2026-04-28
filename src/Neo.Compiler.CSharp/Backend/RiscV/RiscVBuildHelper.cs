@@ -10,6 +10,7 @@
 // modifications are permitted.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using Neo.SmartContract;
@@ -31,24 +32,38 @@ public static class RiscVBuildHelper
         try
         {
             // Get original target JSON from polkatool
-            var origTargetJson = RunCommand("polkatool", "get-target-json-path -b 32")?.Trim();
+            var origTargetJson = RunCommand("polkatool", ["get-target-json-path", "-b", "32"])?.Trim();
             if (string.IsNullOrEmpty(origTargetJson)) return false;
 
             // Fix target JSON: add "abi" field required by newer nightly rustc
-            var targetJson = Path.Combine(Path.GetTempPath(), "neo-riscv32-polkavm.json");
-            FixTargetJson(origTargetJson!, targetJson);
+            var targetJson = Path.Combine(Path.GetTempPath(), $"neo-riscv32-polkavm-{Guid.NewGuid():N}.json");
+            try
+            {
+                FixTargetJson(origTargetJson!, targetJson);
 
-            // Newer nightly toolchains accept JSON target paths directly.
-            var buildResult = RunCommand("cargo",
-                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc",
-                workingDir: crateDir);
-            if (buildResult == null) return false;
+                // Newer nightly toolchains accept JSON target paths directly.
+                var buildResult = RunCommand("cargo",
+                    ["+nightly", "build", "--manifest-path", Path.Combine(crateDir, "Cargo.toml"), "--release", "--target", targetJson, "-Zbuild-std=core,alloc"],
+                    workingDir: crateDir);
+                if (buildResult == null) return false;
 
-            // Link — the output dir uses the JSON file's stem name
-            var target = Path.GetFileNameWithoutExtension(targetJson);
-            var name = Path.GetFileName(crateDir);
-            var elf = Path.Combine(crateDir, "target", target, "release", name);
-            RunCommand("polkatool", $"link --strip -o {outputPath} {elf}", workingDir: crateDir);
+                // Link — the output dir uses the JSON file's stem name
+                var target = Path.GetFileNameWithoutExtension(targetJson);
+                var name = Path.GetFileName(crateDir);
+                var elf = Path.Combine(crateDir, "target", target, "release", name);
+                RunCommand("polkatool", ["link", "--strip", "-o", outputPath, elf], workingDir: crateDir);
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(targetJson);
+                }
+                catch
+                {
+                    // Best-effort cleanup of a generated temp target file.
+                }
+            }
 
             return File.Exists(outputPath);
         }
@@ -86,6 +101,16 @@ public static class RiscVBuildHelper
     /// <returns>Standard output on success, null on failure</returns>
     public static string? RunCommand(string command, string args, string? workingDir = null)
     {
+        return RunCommandCore(command, args, null, workingDir);
+    }
+
+    public static string? RunCommand(string command, IReadOnlyList<string> args, string? workingDir = null)
+    {
+        return RunCommandCore(command, null, args, workingDir);
+    }
+
+    private static string? RunCommandCore(string command, string? argumentString, IReadOnlyList<string>? argumentList, string? workingDir)
+    {
         try
         {
             var cargoBin = Path.Combine(
@@ -99,11 +124,21 @@ public static class RiscVBuildHelper
             var psi = new ProcessStartInfo
             {
                 FileName = command,
-                Arguments = args,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
+            if (argumentList is null)
+            {
+                psi.Arguments = argumentString ?? string.Empty;
+            }
+            else
+            {
+                foreach (var argument in argumentList)
+                {
+                    psi.ArgumentList.Add(argument);
+                }
+            }
             psi.EnvironmentVariables["PATH"] = newPath;
             if (workingDir != null)
             {
@@ -113,26 +148,49 @@ public static class RiscVBuildHelper
             var proc = Process.Start(psi);
             if (proc == null) return null;
 
-            proc.WaitForExit(300000); // 5 min timeout
-            if (proc.ExitCode == 0)
+            var stdout = proc.StandardOutput.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(300000)) // 5 min timeout
             {
-                return proc.StandardOutput.ReadToEnd();
+                try
+                {
+                    proc.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Process may have exited between the timeout and kill attempt.
+                }
+                Console.Error.WriteLine($"Command '{FormatCommand(command, argumentString, argumentList)}' timed out.");
+                return null;
             }
 
-            var stderr = proc.StandardError.ReadToEnd();
-            var message = $"Command '{command} {args}' failed with exit code {proc.ExitCode}.";
-            if (!string.IsNullOrWhiteSpace(stderr))
+            var stdoutText = stdout.GetAwaiter().GetResult();
+            var stderrText = stderr.GetAwaiter().GetResult();
+            if (proc.ExitCode == 0)
             {
-                message += $" Stderr: {stderr.Trim()}";
+                return stdoutText;
+            }
+
+            var message = $"Command '{FormatCommand(command, argumentString, argumentList)}' failed with exit code {proc.ExitCode}.";
+            if (!string.IsNullOrWhiteSpace(stderrText))
+            {
+                message += $" Stderr: {stderrText.Trim()}";
             }
             Console.Error.WriteLine(message);
             return null;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Failed to run command '{command} {args}': {ex.Message}");
+            Console.Error.WriteLine($"Failed to run command '{FormatCommand(command, argumentString, argumentList)}': {ex.Message}");
             return null;
         }
+    }
+
+    private static string FormatCommand(string command, string? argumentString, IReadOnlyList<string>? argumentList)
+    {
+        if (argumentList is null)
+            return string.IsNullOrWhiteSpace(argumentString) ? command : $"{command} {argumentString}";
+        return $"{command} {string.Join(" ", argumentList)}";
     }
 
     /// <summary>

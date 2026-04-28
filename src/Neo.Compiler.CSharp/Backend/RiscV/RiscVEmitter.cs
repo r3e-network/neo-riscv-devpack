@@ -307,13 +307,7 @@ internal class RiscVEmitter : ICodeEmitter
 
     private static string TranslateSyscall(uint hash)
     {
-        return hash switch
-        {
-            0xCE67F69B => "ctx.push_int(0);",
-            0xE26BB4F6 => "ctx.push_int(0);",
-            0xE9BF4C76 => "// Storage.AsReadOnly is a no-op for sentinel storage contexts.",
-            _ => $"bridge_syscall(ctx, 0x{hash:x8});"
-        };
+        return $"bridge_syscall(ctx, 0x{hash:x8});";
     }
 
     #endregion
