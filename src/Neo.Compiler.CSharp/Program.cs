@@ -461,6 +461,60 @@ namespace Neo.Compiler
                     return 1;
                 }
 
+                if (context.Options.Target == CompilationTarget.RiscV && context.GeneratedRustSource != null)
+                {
+                    // Write a complete Cargo crate directory before artifact emission so --build-riscv
+                    // can embed the deployable PolkaVM binary into the NEF payload.
+                    var crateName = baseName.Replace("-", "_").Replace(".", "_").ToLowerInvariant();
+                    var crateDir = Path.Combine(outputFolder, "riscv", crateName);
+                    var crateSrcDir = Path.Combine(crateDir, "src");
+
+                    if (!TryFileOperation("create directory", crateSrcDir, () => Directory.CreateDirectory(crateSrcDir)))
+                    {
+                        return 1;
+                    }
+
+                    var mainRsPath = Path.Combine(crateSrcDir, "main.rs");
+                    if (!TryFileOperation("write", mainRsPath, () => File.WriteAllText(mainRsPath, context.GeneratedRustSource)))
+                    {
+                        return 1;
+                    }
+                    Console.WriteLine($"Created {mainRsPath}");
+
+                    if (context.GeneratedCargoToml != null)
+                    {
+                        var cargoPath = Path.Combine(crateDir, "Cargo.toml");
+                        if (!TryFileOperation("write", cargoPath, () => File.WriteAllText(cargoPath, context.GeneratedCargoToml)))
+                        {
+                            return 1;
+                        }
+                        Console.WriteLine($"Created {cargoPath}");
+                    }
+
+                    Console.WriteLine($"RISC-V crate written to: {crateDir}");
+
+                    if (options.BuildRiscV)
+                    {
+                        var polkavmPath = Path.Combine(outputFolder, $"{baseName}.polkavm");
+                        Console.WriteLine("Building .polkavm binary...");
+                        if (!RiscVBuildHelper.BuildCrate(crateDir, polkavmPath))
+                        {
+                            Console.Error.WriteLine("Failed to build .polkavm binary. Ensure cargo (nightly) and polkatool are installed.");
+                            return 1;
+                        }
+
+                        nef = RiscVBuildHelper.CreateDeployableNef(nef, File.ReadAllBytes(polkavmPath));
+                        Console.WriteLine($"Created {polkavmPath}");
+                    }
+                }
+
+                if (context.Options.Target == CompilationTarget.RiscV && !options.BuildRiscV)
+                {
+                    Console.WriteLine("RISC-V crate generated. Use --build-riscv to emit deployable NEF, manifest, and artifacts.");
+                    Console.WriteLine("Compilation completed successfully.");
+                    return 0;
+                }
+
                 var nefPath = Path.Combine(outputFolder, $"{baseName}.nef");
                 if (!TryFileOperation("write", nefPath, () => File.WriteAllBytes(nefPath, nef.ToArray())))
                 {
@@ -591,53 +645,6 @@ namespace Neo.Compiler
                     }
                 }
                 Console.WriteLine("Compilation completed successfully.");
-
-                if (context.Options.Target == CompilationTarget.RiscV && context.GeneratedRustSource != null)
-                {
-                    // Write a complete Cargo crate directory: riscv/<contract>/src/main.rs + Cargo.toml
-                    var crateName = baseName.Replace("-", "_").Replace(".", "_").ToLowerInvariant();
-                    var crateDir = Path.Combine(outputFolder, "riscv", crateName);
-                    var crateSrcDir = Path.Combine(crateDir, "src");
-
-                    if (!TryFileOperation("create directory", crateSrcDir, () => Directory.CreateDirectory(crateSrcDir)))
-                    {
-                        return 1;
-                    }
-
-                    var mainRsPath = Path.Combine(crateSrcDir, "main.rs");
-                    if (!TryFileOperation("write", mainRsPath, () => File.WriteAllText(mainRsPath, context.GeneratedRustSource)))
-                    {
-                        return 1;
-                    }
-                    Console.WriteLine($"Created {mainRsPath}");
-
-                    if (context.GeneratedCargoToml != null)
-                    {
-                        var cargoPath = Path.Combine(crateDir, "Cargo.toml");
-                        if (!TryFileOperation("write", cargoPath, () => File.WriteAllText(cargoPath, context.GeneratedCargoToml)))
-                        {
-                            return 1;
-                        }
-                        Console.WriteLine($"Created {cargoPath}");
-                    }
-
-                    Console.WriteLine($"RISC-V crate written to: {crateDir}");
-
-                    if (options.BuildRiscV)
-                    {
-                        var polkavmPath = Path.Combine(outputFolder, $"{baseName}.polkavm");
-                        Console.WriteLine($"Building .polkavm binary...");
-                        if (RiscVBuildHelper.BuildCrate(crateDir, polkavmPath))
-                        {
-                            Console.WriteLine($"Created {polkavmPath}");
-                        }
-                        else
-                        {
-                            Console.Error.WriteLine("Failed to build .polkavm binary. Ensure cargo (nightly) and polkatool are installed.");
-                            return 1;
-                        }
-                    }
-                }
 
                 if (options.SecurityAnalysis)
                 {

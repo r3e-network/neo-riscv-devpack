@@ -11,6 +11,8 @@
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Neo.Compiler.Backend.RiscV;
+using Neo.SmartContract;
+using Neo.VM;
 
 namespace Neo.Compiler.CSharp.UnitTests;
 
@@ -63,5 +65,25 @@ public class UnitTest_RiscVTarget
         Assert.IsTrue(rustSource.Contains("\"transfer\" => method_transfer(ctx)"));
         Assert.IsTrue(rustSource.Contains("\"balanceOf\" => method_balanceof(ctx)"));
         Assert.IsTrue(rustSource.Contains("_ => ctx.fault(\"Unknown method\")"));
+    }
+
+    [TestMethod]
+    public void CreateDeployableNefEmbedsPolkaVmBinaryAndRecomputesChecksum()
+    {
+        var source = new NefFile
+        {
+            Compiler = "test",
+            Source = string.Empty,
+            Tokens = [],
+            Script = new byte[] { (byte)OpCode.RET },
+        };
+        source.CheckSum = NefFile.ComputeChecksum(source);
+        var polkaVmBinary = new byte[] { 0x50, 0x56, 0x4d, 0x00, 0x01, 0x02, 0x03, 0x04 };
+
+        var deployable = RiscVBuildHelper.CreateDeployableNef(source, polkaVmBinary);
+
+        CollectionAssert.AreEqual(polkaVmBinary, deployable.Script.ToArray());
+        Assert.AreEqual(NefFile.ComputeChecksum(deployable), deployable.CheckSum);
+        Assert.AreNotEqual(source.CheckSum, deployable.CheckSum);
     }
 }

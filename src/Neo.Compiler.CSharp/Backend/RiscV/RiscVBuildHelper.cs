@@ -12,11 +12,14 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using Neo.SmartContract;
 
 namespace Neo.Compiler.Backend.RiscV;
 
 public static class RiscVBuildHelper
 {
+    private static readonly byte[] PolkaVmMagic = [0x50, 0x56, 0x4d, 0x00];
+
     /// <summary>
     /// Build a Rust crate directory into a .polkavm binary.
     /// </summary>
@@ -53,6 +56,25 @@ public static class RiscVBuildHelper
         {
             return false;
         }
+    }
+
+    public static NefFile CreateDeployableNef(NefFile sourceNef, byte[] polkaVmBinary)
+    {
+        if (sourceNef is null) throw new ArgumentNullException(nameof(sourceNef));
+        if (polkaVmBinary is null) throw new ArgumentNullException(nameof(polkaVmBinary));
+        if (polkaVmBinary.Length < PolkaVmMagic.Length ||
+            !polkaVmBinary.AsSpan(0, PolkaVmMagic.Length).SequenceEqual(PolkaVmMagic))
+            throw new ArgumentException("RISC-V NEF payload must be a PolkaVM binary beginning with PVM magic.", nameof(polkaVmBinary));
+
+        var nef = new NefFile
+        {
+            Compiler = sourceNef.Compiler,
+            Source = sourceNef.Source,
+            Tokens = sourceNef.Tokens,
+            Script = (byte[])polkaVmBinary.Clone(),
+        };
+        nef.CheckSum = NefFile.ComputeChecksum(nef);
+        return nef;
     }
 
     /// <summary>
