@@ -10,9 +10,9 @@
 // modifications are permitted.
 
 using Microsoft.CodeAnalysis;
+using Neo.Compiler.Backend.RiscV;
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.IO;
 
 namespace Neo.Compiler.CSharp.UnitTests;
@@ -152,119 +152,60 @@ public static class RiscVTestHelper
             var contractName = Path.GetFileName(crateDir);
 
             // Get original target JSON from polkatool
-            var origTargetJson = RunCommand("polkatool", "get-target-json-path -b 32", stderr: out var polkatoolStderr)?.Trim();
+            var origTargetJson = RiscVBuildHelper.RunCommand("polkatool", ["get-target-json-path", "-b", "32"])?.Trim();
             if (string.IsNullOrEmpty(origTargetJson))
             {
                 Console.Error.WriteLine($"[RiscV] {contractName}: polkatool get-target-json-path failed.");
-                if (!string.IsNullOrEmpty(polkatoolStderr))
-                    Console.Error.WriteLine($"  stderr: {polkatoolStderr}");
                 return false;
             }
 
             // Fix target JSON: add "abi" field required by newer nightly rustc
-            var targetJson = Path.Combine(Path.GetTempPath(), "neo-riscv32-polkavm.json");
-            FixTargetJson(origTargetJson!, targetJson);
-
-            // Newer nightly toolchains accept JSON target paths directly.
-            var buildResult = RunCommand("cargo",
-                $"+nightly build --manifest-path {crateDir}/Cargo.toml --release --target {targetJson} -Zbuild-std=core,alloc",
-                stderr: out var cargoStderr);
-            if (buildResult == null)
+            var targetJson = Path.Combine(Path.GetTempPath(), $"neo-riscv32-polkavm-{Guid.NewGuid():N}.json");
+            try
             {
-                Console.Error.WriteLine($"[RiscV] {contractName}: cargo build failed.");
-                if (!string.IsNullOrEmpty(cargoStderr))
-                    Console.Error.WriteLine($"  stderr: {cargoStderr}");
-                return false;
+                RiscVBuildHelper.FixTargetJson(origTargetJson!, targetJson);
+
+                // Newer nightly toolchains accept JSON target paths directly.
+                var buildResult = RiscVBuildHelper.RunCommand("cargo",
+                    ["+nightly", "build", "--manifest-path", Path.Combine(crateDir, "Cargo.toml"), "--release", "--target", targetJson, "-Zbuild-std=core,alloc"],
+                    workingDir: crateDir);
+                if (buildResult == null)
+                {
+                    Console.Error.WriteLine($"[RiscV] {contractName}: cargo build failed.");
+                    return false;
+                }
+
+                // Link — the output dir uses the JSON file's stem name
+                var target = Path.GetFileNameWithoutExtension(targetJson);
+                var name = Path.GetFileName(crateDir);
+                var elf = Path.Combine(crateDir, "target", target, "release", name);
+                var polkavm = Path.Combine(crateDir, "contract.polkavm");
+                RiscVBuildHelper.RunCommand("polkatool", ["link", "--strip", "-o", polkavm, elf], workingDir: crateDir);
+
+                if (!File.Exists(polkavm))
+                {
+                    Console.Error.WriteLine($"[RiscV] {contractName}: polkatool link produced no output.");
+                    return false;
+                }
+
+                return true;
             }
-
-            // Link — the output dir uses the JSON file's stem name
-            var target = Path.GetFileNameWithoutExtension(targetJson);
-            var name = Path.GetFileName(crateDir);
-            var elf = Path.Combine(crateDir, "target", target, "release", name);
-            var polkavm = Path.Combine(crateDir, "contract.polkavm");
-            RunCommand("polkatool", $"link --strip -o {polkavm} {elf}", stderr: out var linkStderr);
-
-            if (!File.Exists(polkavm))
+            finally
             {
-                Console.Error.WriteLine($"[RiscV] {contractName}: polkatool link produced no output.");
-                if (!string.IsNullOrEmpty(linkStderr))
-                    Console.Error.WriteLine($"  stderr: {linkStderr}");
-                return false;
+                try
+                {
+                    File.Delete(targetJson);
+                }
+                catch
+                {
+                    // Best-effort cleanup of a generated temp target file.
+                }
             }
-
-            return true;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[RiscV] BuildCrate exception: {ex.Message}");
             return false;
-        }
-    }
-
-    /// <summary>
-    /// Patches the polkatool-generated target JSON to add the "abi" field
-    /// required by newer nightly rustc for RISC-V targets.
-    /// </summary>
-    private static void FixTargetJson(string sourcePath, string destPath)
-    {
-        var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(sourcePath));
-        var root = json.RootElement;
-
-        // Check if "abi" field already exists
-        if (root.TryGetProperty("abi", out _))
-        {
-            File.Copy(sourcePath, destPath, overwrite: true);
-            return;
-        }
-
-        // Rebuild JSON with "abi" field inserted
-        using var stream = new MemoryStream();
-        using var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = true });
-        writer.WriteStartObject();
-        foreach (var prop in root.EnumerateObject())
-        {
-            prop.WriteTo(writer);
-        }
-        // Add abi field matching llvm-abiname
-        var abiName = root.TryGetProperty("llvm-abiname", out var abiname) ? abiname.GetString() ?? "ilp32e" : "ilp32e";
-        writer.WriteString("abi", abiName);
-        writer.WriteEndObject();
-        writer.Flush();
-        File.WriteAllBytes(destPath, stream.ToArray());
-    }
-
-    private static string? RunCommand(string command, string args, out string? stderr)
-    {
-        stderr = null;
-        try
-        {
-            var cargoBin = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".cargo", "bin");
-            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-            var newPath = Directory.Exists(cargoBin)
-                ? cargoBin + Path.PathSeparator + currentPath
-                : currentPath;
-
-            // Use bash so the child sees the updated PATH
-            var psi = new ProcessStartInfo
-            {
-                FileName = "/bin/bash",
-                Arguments = $"-c \"{command} {args.Replace("\"", "\\\"")}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            psi.EnvironmentVariables["PATH"] = newPath;
-            var proc = Process.Start(psi);
-            proc?.WaitForExit(300000); // 5 min timeout
-            stderr = proc?.StandardError.ReadToEnd();
-            return proc?.ExitCode == 0 ? proc.StandardOutput.ReadToEnd() : null;
-        }
-        catch (Exception ex)
-        {
-            stderr = ex.Message;
-            return null;
         }
     }
 

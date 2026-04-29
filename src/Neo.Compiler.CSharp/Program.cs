@@ -73,6 +73,7 @@ namespace Neo.Compiler
             rootCommand.AddOption(new Option<bool>("--no-inline", "Instruct the compiler not to insert inline code."));
             rootCommand.AddOption(new Option<CompilationTarget>("--target", () => CompilationTarget.NeoVM, "Compilation target: NeoVM (default) or RiscV."));
             rootCommand.AddOption(new Option<bool>("--build-riscv", "After RISC-V compilation, build the .polkavm binary using cargo and polkatool."));
+            rootCommand.AddOption(new Option<string>("--riscv-crates-path", "Path from the generated RISC-V crate to neo-riscv-vm/crates, or an absolute crates path."));
             rootCommand.AddOption(new Option<byte>("--address-version", () => ProtocolSettings.Default.AddressVersion, "Indicates the address version used by the compiler."));
 
             var debugOption = new Option<CompilationOptions.DebugType>(["-d", "--debug"],
@@ -481,15 +482,13 @@ namespace Neo.Compiler
                     }
                     Console.WriteLine($"Created {mainRsPath}");
 
-                    if (context.GeneratedCargoToml != null)
+                    var cargoToml = RustCodeBuilder.BuildCargoToml(baseName, ResolveRiscVCratesPath(options, crateDir));
+                    var cargoPath = Path.Combine(crateDir, "Cargo.toml");
+                    if (!TryFileOperation("write", cargoPath, () => File.WriteAllText(cargoPath, cargoToml)))
                     {
-                        var cargoPath = Path.Combine(crateDir, "Cargo.toml");
-                        if (!TryFileOperation("write", cargoPath, () => File.WriteAllText(cargoPath, context.GeneratedCargoToml)))
-                        {
-                            return 1;
-                        }
-                        Console.WriteLine($"Created {cargoPath}");
+                        return 1;
                     }
+                    Console.WriteLine($"Created {cargoPath}");
 
                     Console.WriteLine($"RISC-V crate written to: {crateDir}");
 
@@ -698,6 +697,66 @@ namespace Neo.Compiler
                 Console.Error.WriteLine("Compilation failed.");
                 return 1;
             }
+        }
+
+        internal const string RiscVCratesPathEnvironmentVariable = "NEO_RISCV_CRATES_PATH";
+
+        internal static string ResolveRiscVCratesPath(Options options, string crateDir)
+        {
+            if (!string.IsNullOrWhiteSpace(options.RiscVCratesPath))
+                return NormalizeCargoPath(options.RiscVCratesPath);
+
+            var configuredCratesPath = Environment.GetEnvironmentVariable(RiscVCratesPathEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(configuredCratesPath))
+                return NormalizeCargoPath(Path.GetFullPath(configuredCratesPath));
+
+            var cratesPath = FindRiscVCratesDirectoryFrom(crateDir)
+                ?? FindRiscVCratesDirectoryFrom(Directory.GetCurrentDirectory())
+                ?? FindRiscVCratesDirectoryFrom(AppContext.BaseDirectory);
+
+            return cratesPath is null
+                ? "../../crates"
+                : NormalizeCargoPath(Path.GetRelativePath(crateDir, cratesPath));
+        }
+
+        internal static string? FindRiscVCratesDirectoryFrom(string start)
+        {
+            var dir = Path.GetFullPath(start);
+            while (!string.IsNullOrEmpty(dir))
+            {
+                var localCrates = Path.Combine(dir, "crates");
+                if (HasRiscVCrates(localCrates))
+                    return localCrates;
+
+                var nestedCrates = Path.Combine(dir, "neo-riscv-vm", "crates");
+                if (HasRiscVCrates(nestedCrates))
+                    return nestedCrates;
+
+                var parent = Path.GetDirectoryName(dir);
+                if (string.IsNullOrEmpty(parent))
+                    break;
+
+                var siblingCrates = Path.Combine(parent, "neo-riscv-vm", "crates");
+                if (HasRiscVCrates(siblingCrates))
+                    return siblingCrates;
+
+                dir = parent;
+            }
+
+            return null;
+        }
+
+        private static bool HasRiscVCrates(string cratesPath)
+        {
+            return Directory.Exists(Path.Combine(cratesPath, "neo-riscv-rt")) &&
+                Directory.Exists(Path.Combine(cratesPath, "neo-riscv-contract-harness"));
+        }
+
+        private static string NormalizeCargoPath(string path)
+        {
+            return path
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
         }
 
         private static bool TryFileOperation(string operation, string target, Action action)

@@ -14,6 +14,7 @@ using Neo.Compiler.Backend.RiscV;
 using Neo.SmartContract;
 using Neo.VM;
 using System;
+using System.IO;
 
 namespace Neo.Compiler.CSharp.UnitTests;
 
@@ -141,5 +142,38 @@ public class UnitTest_RiscVTarget
         var output = RiscVBuildHelper.RunCommand("printf", ["%s", "hello world"]);
 
         Assert.AreEqual("hello world", output);
+    }
+
+    [TestMethod]
+    public void ResolveRiscVCratesPathUsesExplicitCompilerOption()
+    {
+        var options = new Options
+        {
+            RiscVCratesPath = "../custom-crates",
+        };
+
+        Assert.AreEqual("../custom-crates", Program.ResolveRiscVCratesPath(options, "/tmp/contract"));
+    }
+
+    [TestMethod]
+    public void FindRiscVCratesDirectoryFindsSiblingVmRepository()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"neo-riscv-crates-{Guid.NewGuid():N}");
+        var crateDir = Path.Combine(root, "neo-riscv-devpack", "bin", "sc", "riscv", "contract");
+        var expectedCrates = Path.Combine(root, "neo-riscv-vm", "crates");
+
+        try
+        {
+            Directory.CreateDirectory(crateDir);
+            Directory.CreateDirectory(Path.Combine(expectedCrates, "neo-riscv-rt"));
+            Directory.CreateDirectory(Path.Combine(expectedCrates, "neo-riscv-contract-harness"));
+
+            Assert.AreEqual(expectedCrates, Program.FindRiscVCratesDirectoryFrom(crateDir));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 }
