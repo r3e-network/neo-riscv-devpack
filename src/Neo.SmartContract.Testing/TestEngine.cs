@@ -755,7 +755,7 @@ namespace Neo.SmartContract.Testing
 
             var bridge = RiscVBridge ?? CreateDefaultRiscVBridge()
                 ?? throw new InvalidOperationException(
-                    "RISC-V backend requested but libneo_riscv_host.so could not be resolved.");
+                    "RISC-V backend requested but the native host library could not be resolved.");
             RiscVBridge ??= bridge;
 
             var provider = new RiscvApplicationEngineProvider(bridge);

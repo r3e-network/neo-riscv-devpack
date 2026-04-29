@@ -110,7 +110,7 @@ Expected: the tests either PASS or reveal the next concrete translator/runtime m
 ### Task 4: Run The Validation Slice With Proper Adapter Staging
 
 **Files:**
-- Modify only if new evidence requires it: `compat/Neo.Riscv.Adapter/*`, `tests/Neo.UnitTests/*`, or VM packaging scripts
+- Modify only if new evidence requires it: `dotnet/Neo.Riscv.Adapter/*`, `tests/Neo.UnitTests/*`, or VM packaging scripts
 - Test: `neo-riscv-vm/scripts/package-adapter-plugin.sh`
 - Test: `neo-riscv-core/tests/Neo.UnitTests/Neo.UnitTests.csproj`
 

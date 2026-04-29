@@ -108,9 +108,30 @@ public class UnitTest_RiscVExecution
     private void RequireRuntime()
     {
         if (!s_runtimeAvailable)
-            Assert.Inconclusive("RISC-V native library (libneo_riscv_host.so) not available.");
+            Assert.Inconclusive("RISC-V native host library not available.");
         if (!s_contractsBuilt)
             Assert.Inconclusive("RISC-V contract compilation toolchain not available.");
+    }
+
+    [TestMethod]
+    public void NativeLibraryResolutionFindsPlatformHostLibrary()
+    {
+        var method = typeof(RiscVExecutionBridge).GetMethod(
+            "FindNativeLibrary",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.IsNotNull(method);
+
+        var resolved = (string?)method.Invoke(null, null);
+        if (resolved is null)
+            Assert.Inconclusive("RISC-V native host library has not been built in this workspace.");
+
+        var expectedFileName = OperatingSystem.IsWindows()
+            ? "neo_riscv_host.dll"
+            : OperatingSystem.IsMacOS()
+                ? "libneo_riscv_host.dylib"
+                : "libneo_riscv_host.so";
+
+        Assert.AreEqual(expectedFileName, Path.GetFileName(resolved));
     }
 
     // -----------------------------------------------------------

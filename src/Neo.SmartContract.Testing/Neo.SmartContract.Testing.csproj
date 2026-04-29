@@ -40,11 +40,11 @@
            layout (../../../neo-riscv-vm) where this devpack lives beside the vm sibling
            under a shared parent; fall back to a stand-alone sibling (../../../../neo-riscv-vm)
            for flatter checkouts. -->
-      <ProjectReference Include="..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
-      <ProjectReference Include="..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
+      <ProjectReference Include="..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
+      <ProjectReference Include="..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
     </ItemGroup>
 
-    <PropertyGroup Condition="Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') OR Exists('..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')">
+    <PropertyGroup Condition="Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') OR Exists('..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')">
       <DefineConstants>$(DefineConstants);NEO_RISCV_ADAPTER</DefineConstants>
     </PropertyGroup>
 

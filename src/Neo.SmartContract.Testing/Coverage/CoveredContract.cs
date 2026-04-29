@@ -86,6 +86,15 @@ namespace Neo.SmartContract.Testing.Coverage
         {
             Name = state.Manifest.Name + $" [{Hash}]";
 
+            if (state.Type != ContractType.NeoVM)
+            {
+                Methods = state.Manifest.Abi.Methods
+                    .Select(method => new CoveredMethod(this, method, 0))
+                    .OrderBy(method => method.Offset)
+                    .ToArray();
+                return;
+            }
+
             Script script = state.Script;
             HashSet<int> privateAdded = new();
             List<ContractMethodDescriptor> methods = new(state.Manifest.Abi.Methods);

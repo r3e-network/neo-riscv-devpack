@@ -41,10 +41,11 @@ public static class RiscVBuildHelper
             {
                 FixTargetJson(origTargetJson!, targetJson);
 
-                // Newer nightly toolchains accept JSON target paths directly.
-                var buildResult = RunCommand("cargo",
-                    ["+nightly", "build", "--manifest-path", Path.Combine(crateDir, "Cargo.toml"), "--release", "--target", targetJson, "-Zbuild-std=core,alloc"],
-                    workingDir: crateDir);
+                // Newer nightly toolchains accept JSON target paths directly. Prefer
+                // offline mode so tests and local builds reuse the neo-riscv-vm cache
+                // instead of depending on crates.io availability.
+                var buildResult = RunCargoBuild(crateDir, targetJson, offline: true)
+                    ?? RunCargoBuild(crateDir, targetJson, offline: false);
                 if (buildResult == null) return false;
 
                 // Link — the output dir uses the JSON file's stem name
@@ -71,6 +72,25 @@ public static class RiscVBuildHelper
         {
             return false;
         }
+    }
+
+    public static string? RunCargoBuild(string crateDir, string targetJson, bool offline)
+    {
+        var args = new List<string>
+        {
+            "+nightly",
+            "build",
+            "--manifest-path",
+            Path.Combine(crateDir, "Cargo.toml"),
+            "--release",
+            "--target",
+            targetJson,
+            "-Zbuild-std=core,alloc",
+            "-Zjson-target-spec"
+        };
+        if (offline)
+            args.Add("--offline");
+        return RunCommand("cargo", args, workingDir: crateDir);
     }
 
     public static NefFile CreateDeployableNef(NefFile sourceNef, byte[] polkaVmBinary)

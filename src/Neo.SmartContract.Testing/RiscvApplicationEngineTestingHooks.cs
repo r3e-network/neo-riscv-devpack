@@ -63,6 +63,9 @@ namespace Neo.SmartContract.Testing
             if (!testEngine.EnableCoverageCapture)
                 return;
 
+            if (contractState.Type == ContractType.RiscV)
+                return;
+
             if (!testEngine.Coverage.TryGetValue(contractHash, out var coveredContract))
             {
                 coveredContract = new CoveredContract(testEngine.MethodDetection, contractHash, contractState);

@@ -165,10 +165,10 @@ public static class RiscVTestHelper
             {
                 RiscVBuildHelper.FixTargetJson(origTargetJson!, targetJson);
 
-                // Newer nightly toolchains accept JSON target paths directly.
-                var buildResult = RiscVBuildHelper.RunCommand("cargo",
-                    ["+nightly", "build", "--manifest-path", Path.Combine(crateDir, "Cargo.toml"), "--release", "--target", targetJson, "-Zbuild-std=core,alloc"],
-                    workingDir: crateDir);
+                // Newer nightly toolchains accept JSON target paths directly. Prefer
+                // offline mode so repeated test runs do not depend on crates.io.
+                var buildResult = RiscVBuildHelper.RunCargoBuild(crateDir, targetJson, offline: true)
+                    ?? RiscVBuildHelper.RunCargoBuild(crateDir, targetJson, offline: false);
                 if (buildResult == null)
                 {
                     Console.Error.WriteLine($"[RiscV] {contractName}: cargo build failed.");

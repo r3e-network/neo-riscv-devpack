@@ -7,6 +7,9 @@
 		<IsPackable>false</IsPackable>
 		<IsTestProject>true</IsTestProject>
 		<NoWarn>CS0067;CS8981</NoWarn> <!-- disable CS0067(event is never used) -->
+		<RiscvHostLibFileName Condition="$([MSBuild]::IsOSPlatform('Windows'))">neo_riscv_host.dll</RiscvHostLibFileName>
+		<RiscvHostLibFileName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libneo_riscv_host.dylib</RiscvHostLibFileName>
+		<RiscvHostLibFileName Condition="'$(RiscvHostLibFileName)' == ''">libneo_riscv_host.so</RiscvHostLibFileName>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -18,20 +21,20 @@
 		<!-- Canonical adapter lives in the neo-riscv-vm sibling repo. Prefer monorepo
 		     layout (../../../neo-riscv-vm) where vm lives beside this devpack under a
 		     shared parent; fall back to a flatter sibling (../../../../neo-riscv-vm). -->
-		<ProjectReference Include="..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
-		<ProjectReference Include="..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
+		<ProjectReference Include="..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
+		<ProjectReference Include="..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
 	</ItemGroup>
 
 	<!-- RISC-V native library for direct P/Invoke testing -->
 	<ItemGroup>
-		<Content Include="..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so"
-		         Condition="Exists('..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so')">
-			<Link>libneo_riscv_host.so</Link>
+		<Content Include="..\..\..\neo-riscv-vm\target\release\$(RiscvHostLibFileName)"
+		         Condition="Exists('..\..\..\neo-riscv-vm\target\release\$(RiscvHostLibFileName)')">
+			<Link>$(RiscvHostLibFileName)</Link>
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
-		<Content Include="..\..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so"
-		         Condition="Exists('..\..\..\..\neo-riscv-vm\target\release\libneo_riscv_host.so')">
-			<Link>libneo_riscv_host.so</Link>
+		<Content Include="..\..\..\..\neo-riscv-vm\target\release\$(RiscvHostLibFileName)"
+		         Condition="Exists('..\..\..\..\neo-riscv-vm\target\release\$(RiscvHostLibFileName)')">
+			<Link>$(RiscvHostLibFileName)</Link>
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 	</ItemGroup>

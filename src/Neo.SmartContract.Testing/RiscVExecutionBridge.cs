@@ -210,8 +210,8 @@ public static class RiscVExecutionBridge
         libraryPath ??= FindNativeLibrary();
         if (libraryPath == null || !File.Exists(libraryPath))
             throw new FileNotFoundException(
-                "libneo_riscv_host.so not found. Build the Rust host library first.",
-                libraryPath ?? "libneo_riscv_host.so");
+                "RISC-V native host library not found. Build the Rust host library first.",
+                libraryPath ?? GetPlatformFileName());
 
         s_libraryHandle = NativeLibrary.Load(libraryPath);
 
@@ -1945,21 +1945,22 @@ public static class RiscVExecutionBridge
 
     private static IEnumerable<string> EnumerateNativeLibraryCandidates()
     {
-        yield return Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so");
-        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+        var fileName = GetPlatformFileName();
+        yield return Path.Combine(AppContext.BaseDirectory, fileName);
+        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", fileName);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var root in EnumerateNativeLibrarySearchRoots())
         {
             foreach (var candidate in new[]
             {
-                Path.Combine(root, "target", "release", "libneo_riscv_host.so"),
-                Path.Combine(root, "target", "debug", "libneo_riscv_host.so"),
-                Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
-                Path.Combine(root, "neo-riscv-vm", "target", "release", "libneo_riscv_host.so"),
-                Path.Combine(root, "neo-riscv-vm", "target", "debug", "libneo_riscv_host.so"),
-                Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
-                Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
+                Path.Combine(root, "target", "release", fileName),
+                Path.Combine(root, "target", "debug", fileName),
+                Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", fileName),
+                Path.Combine(root, "neo-riscv-vm", "target", "release", fileName),
+                Path.Combine(root, "neo-riscv-vm", "target", "debug", fileName),
+                Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", fileName),
+                Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", fileName),
             })
             {
                 var full = Path.GetFullPath(candidate);
@@ -1967,6 +1968,15 @@ public static class RiscVExecutionBridge
                     yield return full;
             }
         }
+    }
+
+    private static string GetPlatformFileName()
+    {
+        if (OperatingSystem.IsWindows())
+            return "neo_riscv_host.dll";
+        if (OperatingSystem.IsMacOS())
+            return "libneo_riscv_host.dylib";
+        return "libneo_riscv_host.so";
     }
 
     private static IEnumerable<string> EnumerateNativeLibrarySearchRoots()

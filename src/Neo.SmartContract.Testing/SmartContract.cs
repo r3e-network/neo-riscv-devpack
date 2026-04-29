@@ -137,7 +137,7 @@ namespace Neo.SmartContract.Testing
             }
             else if (ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidType))
             {
-                arg = System.Array.Empty<byte>();
+                arg = BigInteger.Zero;
             }
             else if (arg is PrimitiveType primitive)
             {
@@ -197,7 +197,7 @@ namespace Neo.SmartContract.Testing
                     }
                     else if (ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidType))
                     {
-                        arg = System.Array.Empty<byte>();
+                        arg = BigInteger.Zero;
                     }
                     else if (arg is InteropInterface interop)
                     {

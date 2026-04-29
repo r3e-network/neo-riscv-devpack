@@ -51,7 +51,7 @@ public class DebugAndTestBase<T> : TestBase<T>
             else
             {
                 throw new InvalidOperationException(
-                    "[RISC-V] libneo_riscv_host.so not found. Set NEO_RISCV_HOST_LIB or use NEO_TEST_BACKEND=neovm.");
+                    "[RISC-V] native host library not found. Set NEO_RISCV_HOST_LIB or use NEO_TEST_BACKEND=neovm.");
             }
         }
 
@@ -91,19 +91,29 @@ public class DebugAndTestBase<T> : TestBase<T>
 
     private static IEnumerable<string> EnumerateNativeLibraryCandidates()
     {
-        yield return Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so");
-        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+        var fileName = GetPlatformFileName();
+        yield return Path.Combine(AppContext.BaseDirectory, fileName);
+        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", fileName);
 
         foreach (var root in EnumerateNativeLibrarySearchRoots().Distinct())
         {
-            yield return Path.Combine(root, "target", "release", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "target", "debug", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "neo-riscv-vm", "target", "release", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "neo-riscv-vm", "target", "debug", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
-            yield return Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "target", "release", fileName);
+            yield return Path.Combine(root, "target", "debug", fileName);
+            yield return Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", fileName);
+            yield return Path.Combine(root, "neo-riscv-vm", "target", "release", fileName);
+            yield return Path.Combine(root, "neo-riscv-vm", "target", "debug", fileName);
+            yield return Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", fileName);
+            yield return Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", fileName);
         }
+    }
+
+    private static string GetPlatformFileName()
+    {
+        if (OperatingSystem.IsWindows())
+            return "neo_riscv_host.dll";
+        if (OperatingSystem.IsMacOS())
+            return "libneo_riscv_host.dylib";
+        return "libneo_riscv_host.so";
     }
 
     private static IEnumerable<string> EnumerateNativeLibrarySearchRoots()
