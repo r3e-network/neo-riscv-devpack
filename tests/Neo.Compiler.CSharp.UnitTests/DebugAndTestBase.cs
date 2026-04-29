@@ -32,25 +32,14 @@ public class DebugAndTestBase<T> : TestBase<T>
     protected virtual bool TestGasConsume { set; get; } = true;
 
     /// <summary>
-    /// Whether to use RISC-V backend for execution.
-    /// Controlled by NEO_TEST_BACKEND environment variable.
-    /// </summary>
-    private static readonly ExecutionBackend s_backend;
-
-    /// <summary>
     /// Shared RISC-V bridge instance (created once, reused across tests).
     /// </summary>
     private static readonly IRiscvVmBridge? s_riscvBridge;
+    private static readonly ExecutionBackend s_backend;
 
     static DebugAndTestBase()
     {
-        // Read backend from environment
-        var backendEnv = Environment.GetEnvironmentVariable("NEO_TEST_BACKEND") ?? "neovm";
-        s_backend = backendEnv.Equals("riscv", StringComparison.OrdinalIgnoreCase)
-            ? ExecutionBackend.RiscV
-            : ExecutionBackend.NeoVM;
-
-        // Initialize the RISC-V bridge if requested
+        s_backend = ResolveBackendFromEnvironment();
         if (s_backend == ExecutionBackend.RiscV)
         {
             var libPath = FindNativeLibrary();
@@ -61,12 +50,27 @@ public class DebugAndTestBase<T> : TestBase<T>
             }
             else
             {
-                Console.Error.WriteLine("[RISC-V] WARNING: libneo_riscv_host.so not found, falling back to NeoVM");
+                throw new InvalidOperationException(
+                    "[RISC-V] libneo_riscv_host.so not found. Set NEO_RISCV_HOST_LIB or use NEO_TEST_BACKEND=neovm.");
             }
         }
 
         var context = TestCleanup.TestInitialize(typeof(T));
         TestSingleContractBasicBlockStartEnd(context!);
+    }
+
+    private static ExecutionBackend ResolveBackendFromEnvironment()
+    {
+        var backendEnv = Environment.GetEnvironmentVariable("NEO_TEST_BACKEND");
+        if (string.IsNullOrWhiteSpace(backendEnv) ||
+            backendEnv.Equals("neovm", StringComparison.OrdinalIgnoreCase))
+            return ExecutionBackend.NeoVM;
+
+        if (backendEnv.Equals("riscv", StringComparison.OrdinalIgnoreCase))
+            return ExecutionBackend.RiscV;
+
+        throw new InvalidOperationException(
+            $"Unsupported test backend '{backendEnv}'. Use 'neovm' or 'riscv'.");
     }
 
     private static string? FindNativeLibrary()
@@ -75,17 +79,7 @@ public class DebugAndTestBase<T> : TestBase<T>
         if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
             return envPath;
 
-        var candidates = new[]
-        {
-            // Next to test binary (copied by MSBuild Content item)
-            Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so"),
-            // Repo root build output
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "target", "release", "libneo_riscv_host.so")),
-            // Absolute fallback
-            "/home/neo/git/neo-riscv-vm/target/release/libneo_riscv_host.so",
-        };
-
-        foreach (var path in candidates)
+        foreach (var path in EnumerateNativeLibraryCandidates())
         {
             var full = Path.GetFullPath(path);
             if (File.Exists(full))
@@ -93,6 +87,41 @@ public class DebugAndTestBase<T> : TestBase<T>
         }
 
         return null;
+    }
+
+    private static IEnumerable<string> EnumerateNativeLibraryCandidates()
+    {
+        yield return Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so");
+        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+
+        foreach (var root in EnumerateNativeLibrarySearchRoots().Distinct())
+        {
+            yield return Path.Combine(root, "target", "release", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "target", "debug", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "neo-riscv-vm", "target", "release", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "neo-riscv-vm", "target", "debug", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+            yield return Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+        }
+    }
+
+    private static IEnumerable<string> EnumerateNativeLibrarySearchRoots()
+    {
+        foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        {
+            var directory = Path.GetFullPath(start);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                yield return directory;
+
+                var parent = Path.GetDirectoryName(directory);
+                if (string.IsNullOrEmpty(parent) || parent == directory)
+                    break;
+
+                directory = parent;
+            }
+        }
     }
 
     public static void TestSingleContractBasicBlockStartEnd(CompilationContext result)
@@ -147,15 +176,8 @@ public class DebugAndTestBase<T> : TestBase<T>
 
     protected override TestEngine CreateTestEngine()
     {
-        var engine = base.CreateTestEngine();
-
-        // Wire up the RISC-V bridge before any contracts are deployed
-        if (s_backend == ExecutionBackend.RiscV && s_riscvBridge != null)
-        {
-            engine.RiscVBridge = s_riscvBridge;
-            engine.Backend = ExecutionBackend.RiscV;
-        }
-
+        var engine = new TestEngine(true, s_backend, s_backend == ExecutionBackend.RiscV ? s_riscvBridge : null);
+        engine.SetTransactionSigners(Alice);
         return engine;
     }
 

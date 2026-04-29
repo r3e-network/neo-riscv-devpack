@@ -13,6 +13,7 @@ using Moq;
 using Neo.Cryptography.ECC;
 using Neo.Extensions;
 using Neo.Network.P2P.Payloads;
+using Neo.Persistence;
 using Neo.Persistence.Providers;
 using Neo.SmartContract.Manifest;
 using Neo.SmartContract.Native;
@@ -29,6 +30,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -208,8 +210,8 @@ namespace Neo.SmartContract.Testing
         public UInt160 Sender => Transaction.Sender;
 
         /// <summary>
-        /// Execution backend: NeoVM (default) or RiscV.
-        /// Set via NEO_TEST_BACKEND environment variable or programmatically.
+        /// Execution backend. Defaults to host-side NeoVM for compatibility; set to
+        /// RiscV via NEO_TEST_BACKEND or programmatically for RISC-V parity tests.
         /// </summary>
         public ExecutionBackend Backend { get; set; } = ExecutionBackend.NeoVM;
 
@@ -227,6 +229,20 @@ namespace Neo.SmartContract.Testing
         /// standard ApplicationEngine regardless of backend).
         /// </summary>
         public Dictionary<UInt160, byte[]> RiscVBinaries { get; } = new();
+
+        /// <summary>
+        /// Resolves the default backend requested by the test environment.
+        /// </summary>
+        public static ExecutionBackend ResolveDefaultBackendFromEnvironment()
+        {
+            var value = Environment.GetEnvironmentVariable("NEO_TEST_BACKEND");
+            if (string.IsNullOrWhiteSpace(value) ||
+                string.Equals(value, "neovm", StringComparison.OrdinalIgnoreCase))
+                return ExecutionBackend.NeoVM;
+            if (string.Equals(value, "riscv", StringComparison.OrdinalIgnoreCase))
+                return ExecutionBackend.RiscV;
+            throw new InvalidOperationException($"Unsupported NEO_TEST_BACKEND value '{value}'. Use 'neovm' or 'riscv'.");
+        }
 
         /// <summary>
         /// Call flags
@@ -249,8 +265,13 @@ namespace Neo.SmartContract.Testing
         /// Constructor
         /// </summary>
         /// <param name="initializeNativeContracts">Initialize native contracts</param>
-        public TestEngine(bool initializeNativeContracts = true)
-            : this(new EngineStorage(new MemoryStore()), Default, initializeNativeContracts)
+        /// <param name="backend">Execution backend used for native initialization and contract execution.</param>
+        /// <param name="riscVBridge">RISC-V bridge used when <paramref name="backend"/> is <see cref="ExecutionBackend.RiscV"/>.</param>
+        public TestEngine(
+            bool initializeNativeContracts = true,
+            ExecutionBackend backend = ExecutionBackend.NeoVM,
+            IRiscvVmBridge? riscVBridge = null)
+            : this(new EngineStorage(new MemoryStore()), Default, initializeNativeContracts, backend, riscVBridge)
         { }
 
         /// <summary>
@@ -258,8 +279,14 @@ namespace Neo.SmartContract.Testing
         /// </summary>
         /// <param name="storage">Storage</param>
         /// <param name="initializeNativeContracts">Initialize native contracts</param>
-        public TestEngine(EngineStorage storage, bool initializeNativeContracts = true)
-            : this(storage, Default, initializeNativeContracts)
+        /// <param name="backend">Execution backend used for native initialization and contract execution.</param>
+        /// <param name="riscVBridge">RISC-V bridge used when <paramref name="backend"/> is <see cref="ExecutionBackend.RiscV"/>.</param>
+        public TestEngine(
+            EngineStorage storage,
+            bool initializeNativeContracts = true,
+            ExecutionBackend backend = ExecutionBackend.NeoVM,
+            IRiscvVmBridge? riscVBridge = null)
+            : this(storage, Default, initializeNativeContracts, backend, riscVBridge)
         { }
 
         /// <summary>
@@ -267,8 +294,14 @@ namespace Neo.SmartContract.Testing
         /// </summary>
         /// <param name="settings">Settings</param>
         /// <param name="initializeNativeContracts">Initialize native contracts</param>
-        public TestEngine(ProtocolSettings settings, bool initializeNativeContracts = true) :
-            this(new EngineStorage(new MemoryStore()), settings, initializeNativeContracts)
+        /// <param name="backend">Execution backend used for native initialization and contract execution.</param>
+        /// <param name="riscVBridge">RISC-V bridge used when <paramref name="backend"/> is <see cref="ExecutionBackend.RiscV"/>.</param>
+        public TestEngine(
+            ProtocolSettings settings,
+            bool initializeNativeContracts = true,
+            ExecutionBackend backend = ExecutionBackend.NeoVM,
+            IRiscvVmBridge? riscVBridge = null) :
+            this(new EngineStorage(new MemoryStore()), settings, initializeNativeContracts, backend, riscVBridge)
         { }
 
         /// <summary>
@@ -277,10 +310,19 @@ namespace Neo.SmartContract.Testing
         /// <param name="storage">Storage</param>
         /// <param name="settings">Settings</param>
         /// <param name="initializeNativeContracts">Initialize native contracts</param>
-        public TestEngine(EngineStorage storage, ProtocolSettings settings, bool initializeNativeContracts = true)
+        /// <param name="backend">Execution backend used for native initialization and contract execution.</param>
+        /// <param name="riscVBridge">RISC-V bridge used when <paramref name="backend"/> is <see cref="ExecutionBackend.RiscV"/>.</param>
+        public TestEngine(
+            EngineStorage storage,
+            ProtocolSettings settings,
+            bool initializeNativeContracts = true,
+            ExecutionBackend backend = ExecutionBackend.NeoVM,
+            IRiscvVmBridge? riscVBridge = null)
         {
             Storage = storage;
             ProtocolSettings = settings;
+            Backend = backend;
+            RiscVBridge = riscVBridge;
 
             var validatorsScript = Contract.CreateMultiSigRedeemScript(settings.StandbyValidators.Count - (settings.StandbyValidators.Count - 1) / 3, settings.StandbyValidators);
             var committeeScript = Contract.CreateMultiSigRedeemScript(settings.StandbyCommittee.Count - (settings.StandbyCommittee.Count - 1) / 2, settings.StandbyCommittee);
@@ -438,9 +480,17 @@ namespace Neo.SmartContract.Testing
         {
             // Deploy
 
-            //UInt160 expectedHash = GetDeployHash(nef, manifest);
+            var expectedHash = GetDeployHash(nef, manifest);
+            var existingState = Neo.SmartContract.Native.NativeContract.ContractManagement.GetContract(Storage.Snapshot, expectedHash);
+            if (existingState is not null && ShouldReuseExistingContractForCallbackMock(manifest, customMock))
+            {
+                return MockContract(existingState.Hash, existingState.Id, customMock);
+            }
+
             var state = Native.ContractManagement.Deploy(nef.ToArray(), Encoding.UTF8.GetBytes(manifest.ToJson().ToString(false)), data)
                 ?? throw new Exception("Can't get the ContractState");
+            if (state.Hash != expectedHash)
+                throw new InvalidOperationException($"Deployed contract hash mismatch: expected={expectedHash}, actual={state.Hash}.");
 
             // Mock contract
 
@@ -457,6 +507,15 @@ namespace Neo.SmartContract.Testing
             }
 
             return ret;
+        }
+
+        private static bool ShouldReuseExistingContractForCallbackMock<T>(
+            ContractManifest manifest,
+            Action<Mock<T>>? customMock) where T : SmartContract
+        {
+            return customMock is not null &&
+                manifest.Abi.Methods.Length == 1 &&
+                manifest.Abi.Methods[0].Name.StartsWith("on", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -486,7 +545,7 @@ namespace Neo.SmartContract.Testing
                 return MockContract(hash, null, customMock);
             }
 
-            var state = NativeContract.ContractManagement.GetContract(Storage.Snapshot, hash)
+            var state = Neo.SmartContract.Native.NativeContract.ContractManagement.GetContract(Storage.Snapshot, hash)
                 ?? throw new KeyNotFoundException($"The contract {hash} does not exist.");
 
             return MockContract(state.Hash, state.Id, customMock);
@@ -645,51 +704,141 @@ namespace Neo.SmartContract.Testing
             var snapshot = Storage.Snapshot.CloneCache();
 
             // Create the appropriate engine based on the selected backend.
-            // When Backend == RiscV and a bridge is available, use RiscvApplicationEngine
-            // which routes NeoVM bytecode through the RISC-V guest interpreter with full
-            // syscall support. Otherwise fall back to the standard TestingApplicationEngine.
 
-            ApplicationEngine engine;
-            if (Backend == ExecutionBackend.RiscV && RiscVBridge != null)
+            using var engine = CreateExecutionEngine(
+                Trigger,
+                Transaction,
+                snapshot,
+                PersistingBlock.UnderlyingBlock,
+                Fee);
+
+            engine.LoadScript(script, initialPosition: initialPosition);
+
+            // Attach to static event
+
+            engine.Log += ApplicationEngineLog;
+            engine.Notify += ApplicationEngineNotify;
+
+            // Execute
+            if (ResetFeeConsumed) FeeConsumed.Reset();
+            beforeExecute?.Invoke(engine);
+            var executionResult = engine.Execute();
+
+            // Increment fee
+
+            foreach (var feeWatcher in _feeWatchers) feeWatcher.Value += engine.FeeConsumed;
+
+            // Process result
+
+            if (executionResult != VMState.HALT)
             {
-                var provider = new RiscvApplicationEngineProvider(RiscVBridge);
-                engine = provider.Create(Trigger, Transaction, snapshot, PersistingBlock.UnderlyingBlock,
-                    ProtocolSettings, Fee, null, null!);
+                throw new TestException(engine);
             }
-            else
+
+            snapshot.Commit();
+
+            if (engine.ResultStack.Count == 0) return StackItem.Null;
+            return engine.ResultStack.Pop();
+        }
+
+        internal ApplicationEngine CreateExecutionEngine(
+            TriggerType trigger,
+            IVerifiable? container,
+            DataCache snapshot,
+            Block? persistingBlock,
+            long fee)
+        {
+            if (Backend == ExecutionBackend.NeoVM)
             {
-                engine = new TestingApplicationEngine(this, Trigger, Transaction, snapshot, PersistingBlock.UnderlyingBlock);
+                return new TestingApplicationEngine(this, trigger, container, snapshot, persistingBlock);
             }
 
-            using (engine)
+            var bridge = RiscVBridge ?? CreateDefaultRiscVBridge()
+                ?? throw new InvalidOperationException(
+                    "RISC-V backend requested but libneo_riscv_host.so could not be resolved.");
+            RiscVBridge ??= bridge;
+
+            var provider = new RiscvApplicationEngineProvider(bridge);
+            var engine = provider.Create(trigger, container, snapshot, persistingBlock, ProtocolSettings, fee, null, null!);
+            if (engine is RiscvApplicationEngine riscvEngine)
+                riscvEngine.TestingHooks = new RiscvApplicationEngineTestingHooks(this);
+            return engine;
+        }
+
+        private static IRiscvVmBridge? CreateDefaultRiscVBridge()
+        {
+            var envPath = Environment.GetEnvironmentVariable(NativeRiscvVmBridge.LibraryPathEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
+                return TryCreateNativeRiscVBridge(envPath);
+
+            foreach (var candidate in EnumerateNativeLibraryCandidates().Distinct())
             {
-                engine.LoadScript(script, initialPosition: initialPosition);
+                var full = Path.GetFullPath(candidate);
+                if (File.Exists(full))
+                    return TryCreateNativeRiscVBridge(full);
+            }
 
-                // Attach to static event
+            return null;
+        }
 
-                engine.Log += ApplicationEngineLog;
-                engine.Notify += ApplicationEngineNotify;
+        private static IRiscvVmBridge? TryCreateNativeRiscVBridge(string libraryPath)
+        {
+            try
+            {
+                return new NativeRiscvVmBridge(libraryPath);
+            }
+            catch (DllNotFoundException)
+            {
+                return null;
+            }
+            catch (BadImageFormatException)
+            {
+                return null;
+            }
+        }
 
-                // Execute
-                if (ResetFeeConsumed) FeeConsumed.Reset();
-                beforeExecute?.Invoke(engine);
-                var executionResult = engine.Execute();
+        private static IEnumerable<string> EnumerateNativeLibraryCandidates()
+        {
+            var fileName = GetPlatformFileName();
+            yield return Path.Combine(AppContext.BaseDirectory, fileName);
+            yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", fileName);
 
-                // Increment fee
+            foreach (var root in EnumerateNativeLibrarySearchRoots())
+            {
+                yield return Path.Combine(root, "target", "release", fileName);
+                yield return Path.Combine(root, "target", "debug", fileName);
+                yield return Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", fileName);
+                yield return Path.Combine(root, "neo-riscv-vm", "target", "release", fileName);
+                yield return Path.Combine(root, "neo-riscv-vm", "target", "debug", fileName);
+                yield return Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", fileName);
+                yield return Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", fileName);
+            }
+        }
 
-                foreach (var feeWatcher in _feeWatchers) feeWatcher.Value += engine.FeeConsumed;
+        private static string GetPlatformFileName()
+        {
+            if (OperatingSystem.IsWindows())
+                return "neo_riscv_host.dll";
+            if (OperatingSystem.IsMacOS())
+                return "libneo_riscv_host.dylib";
+            return "libneo_riscv_host.so";
+        }
 
-                // Process result
-
-                if (executionResult != VMState.HALT)
+        private static IEnumerable<string> EnumerateNativeLibrarySearchRoots()
+        {
+            foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+            {
+                var directory = Path.GetFullPath(start);
+                while (!string.IsNullOrEmpty(directory))
                 {
-                    throw new TestException(engine);
+                    yield return directory;
+
+                    var parent = Path.GetDirectoryName(directory);
+                    if (string.IsNullOrEmpty(parent) || parent == directory)
+                        break;
+
+                    directory = parent;
                 }
-
-                snapshot.Commit();
-
-                if (engine.ResultStack.Count == 0) return StackItem.Null;
-                return engine.ResultStack.Pop();
             }
         }
 

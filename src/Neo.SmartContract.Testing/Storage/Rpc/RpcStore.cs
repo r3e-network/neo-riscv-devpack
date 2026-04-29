@@ -27,6 +27,8 @@ namespace Neo.SmartContract.Testing.Storage.Rpc;
 public class RpcStore : IStore
 {
     private int _id = 0;
+    private readonly HttpClient _httpClient;
+    private readonly bool _disposeHttpClient;
 
     /// <summary>
     /// Event raised when a new snapshot is created
@@ -42,9 +44,8 @@ public class RpcStore : IStore
     /// Constructor
     /// </summary>
     /// <param name="url">Url</param>
-    public RpcStore(Uri url)
+    public RpcStore(Uri url) : this(url, new HttpClient(), true)
     {
-        Url = url;
     }
 
     /// <summary>
@@ -52,6 +53,41 @@ public class RpcStore : IStore
     /// </summary>
     /// <param name="url">Url</param>
     public RpcStore(string url) : this(new Uri(url)) { }
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="url">Url</param>
+    /// <param name="httpClient">HTTP client used for RPC requests</param>
+    public RpcStore(Uri url, HttpClient httpClient) : this(url, httpClient, false) { }
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="url">Url</param>
+    /// <param name="httpClient">HTTP client used for RPC requests</param>
+    public RpcStore(string url, HttpClient httpClient) : this(new Uri(url), httpClient) { }
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="url">Url</param>
+    /// <param name="handler">HTTP handler used for RPC requests</param>
+    public RpcStore(Uri url, HttpMessageHandler handler) : this(url, new HttpClient(handler), true) { }
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="url">Url</param>
+    /// <param name="handler">HTTP handler used for RPC requests</param>
+    public RpcStore(string url, HttpMessageHandler handler) : this(new Uri(url), handler) { }
+
+    private RpcStore(Uri url, HttpClient httpClient, bool disposeHttpClient)
+    {
+        Url = url ?? throw new ArgumentNullException(nameof(url));
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _disposeHttpClient = disposeHttpClient;
+    }
 
     public void Delete(byte[] key) => throw new NotImplementedException();
     public void Put(byte[] key, byte[] value) => throw new NotImplementedException();
@@ -64,6 +100,11 @@ public class RpcStore : IStore
     public bool Contains(byte[] key) => TryGet(key) != null;
     public void Dispose()
     {
+        if (_disposeHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+
         GC.SuppressFinalize(this);
     }
 
@@ -128,11 +169,7 @@ public class RpcStore : IStore
                 id = _id = Interlocked.Increment(ref _id),
             };
 
-            using var httpClient = new HttpClient();
-            var requestContent = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
-            var response = httpClient.PostAsync(Url, requestContent).GetAwaiter().GetResult();
-
-            JObject jo = JObject.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+            JObject jo = SendRpcRequest(requestBody);
 
             if (jo["result"]?.Value<JObject>() is JObject result && result["results"]?.Value<JArray>() is JArray results)
             {
@@ -170,11 +207,11 @@ public class RpcStore : IStore
                     yield break;
                 }
 
-                throw new Exception();
+                throw CreateUnexpectedResponseException(jo);
             }
         }
 
-        throw new Exception();
+        throw new InvalidOperationException("RPC storage query did not complete.");
     }
 
     public bool TryGet(byte[] key, [NotNullWhen(true)] out byte[]? value)
@@ -188,11 +225,7 @@ public class RpcStore : IStore
             id = _id = Interlocked.Increment(ref _id),
         };
 
-        using var httpClient = new HttpClient();
-        var requestContent = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
-        var response = httpClient.PostAsync(Url, requestContent).GetAwaiter().GetResult();
-
-        JObject jo = JObject.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        JObject jo = SendRpcRequest(requestBody);
 
         if (jo["result"]?.Value<string>() is string result)
         {
@@ -213,7 +246,7 @@ public class RpcStore : IStore
                 return false;
             }
 
-            throw new Exception();
+            throw CreateUnexpectedResponseException(jo);
         }
     }
 
@@ -225,6 +258,45 @@ public class RpcStore : IStore
         }
 
         return null;
+    }
+
+    private JObject SendRpcRequest(object requestBody)
+    {
+        using var requestContent = new StringContent(JsonConvert.SerializeObject(requestBody), Encoding.UTF8, "application/json");
+        using var response = _httpClient.PostAsync(Url, requestContent).GetAwaiter().GetResult();
+        var responseContent = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"RPC request failed with HTTP status {(int)response.StatusCode}: {responseContent}");
+        }
+
+        if (string.IsNullOrWhiteSpace(responseContent))
+        {
+            throw new InvalidOperationException("RPC endpoint returned an empty response.");
+        }
+
+        try
+        {
+            return JObject.Parse(responseContent);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("RPC endpoint returned invalid JSON.", ex);
+        }
+    }
+
+    private static Exception CreateUnexpectedResponseException(JObject response)
+    {
+        if (response["error"]?.Value<JObject>() is JObject error)
+        {
+            var code = error["code"]?.Value<int>();
+            var message = error["message"]?.Value<string>();
+
+            return new InvalidOperationException($"RPC storage request failed with code {code}: {message}");
+        }
+
+        return new InvalidOperationException($"Unexpected RPC storage response: {response.ToString(Formatting.None)}");
     }
 
     #endregion

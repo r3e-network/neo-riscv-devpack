@@ -14,6 +14,9 @@ using Neo.SmartContract.Testing;
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Neo.Compiler.CSharp.UnitTests;
 
@@ -34,6 +37,7 @@ public class UnitTest_RiscVExecution
 {
     private static bool s_runtimeAvailable;
     private static bool s_contractsBuilt;
+    private static int s_freedNativeIntegerErrors;
 
     private static RiscVExecutionBridge.ResultStackItem IntegerArg(long value) => new()
     {
@@ -496,6 +500,324 @@ public class UnitTest_RiscVExecution
         // Should fault (or at least not crash the process).
         Assert.IsTrue(result.IsFault,
             "Expected FAULT for garbage binary.");
+    }
+
+    [TestMethod]
+    public void ExecuteBuiltin_ReturnsFault_WhenNativeAbiReturnsFalse()
+    {
+        var initializedField = GetBridgeField("s_initialized");
+        var executeField = GetBridgeField("s_executeNativeContractBuiltin");
+        var previousInitialized = initializedField.GetValue(null);
+        var previousExecute = executeField.GetValue(null);
+
+        try
+        {
+            initializedField.SetValue(null, true);
+            executeField.SetValue(null, Delegate.CreateDelegate(
+                executeField.FieldType,
+                typeof(UnitTest_RiscVExecution).GetMethod(
+                    nameof(ReturnFalseNativeContractBuiltin),
+                    BindingFlags.NonPublic | BindingFlags.Static)!));
+
+            var result = RiscVExecutionBridge.ExecuteBuiltin(new byte[] { 0x50, 0x56, 0x4d, 0x00 }, "test");
+
+            Assert.IsTrue(result.IsFault, "Native ABI false should surface as FAULT.");
+            Assert.AreEqual("neo_riscv_execute_native_contract_builtin returned false.", result.Error);
+        }
+        finally
+        {
+            executeField.SetValue(null, previousExecute);
+            initializedField.SetValue(null, previousInitialized);
+        }
+    }
+
+    [TestMethod]
+    public void Execute_WithSerializedInitialStack_PassesPointerAndCountToNativeAbi()
+    {
+        var initializedField = GetBridgeField("s_initialized");
+        var executeField = GetBridgeField("s_executeNativeContract");
+        var previousInitialized = initializedField.GetValue(null);
+        var previousExecute = executeField.GetValue(null);
+
+        try
+        {
+            initializedField.SetValue(null, true);
+            executeField.SetValue(null, Delegate.CreateDelegate(
+                executeField.FieldType,
+                typeof(UnitTest_RiscVExecution).GetMethod(
+                    nameof(ValidateSerializedInitialStackNativeContract),
+                    BindingFlags.NonPublic | BindingFlags.Static)!));
+
+            var stack = SerializeNativeStackItems(new TestNativeStackItem
+            {
+                Kind = 0,
+                IntegerValue = 42,
+            });
+
+            var result = RiscVExecutionBridge.Execute(
+                new byte[] { 0x50, 0x56, 0x4d, 0x00 },
+                "test",
+                stack,
+                initialStackItemCount: 1);
+
+            Assert.IsTrue(result.IsHalt, result.Error);
+        }
+        finally
+        {
+            executeField.SetValue(null, previousExecute);
+            initializedField.SetValue(null, previousInitialized);
+        }
+    }
+
+    [TestMethod]
+    public void ExecuteBuiltinInteger_FreesI64FaultErrorWithNativeFree()
+    {
+        var initializedField = GetBridgeField("s_initialized");
+        var i64Field = GetBridgeField("s_executeNativeContractBuiltinI64ById");
+        var byIdField = GetBridgeField("s_executeNativeContractBuiltinById");
+        var freeField = GetBridgeField("s_freeExecutionResult");
+        var previousInitialized = initializedField.GetValue(null);
+        var previousI64 = i64Field.GetValue(null);
+        var previousById = byIdField.GetValue(null);
+        var previousFree = freeField.GetValue(null);
+
+        try
+        {
+            s_freedNativeIntegerErrors = 0;
+            initializedField.SetValue(null, true);
+            i64Field.SetValue(null, Delegate.CreateDelegate(
+                i64Field.FieldType,
+                typeof(UnitTest_RiscVExecution).GetMethod(
+                    nameof(ReturnFaultNativeI64ById),
+                    BindingFlags.NonPublic | BindingFlags.Static)!));
+            byIdField.SetValue(null, Delegate.CreateDelegate(
+                byIdField.FieldType,
+                typeof(UnitTest_RiscVExecution).GetMethod(
+                    nameof(ReturnIntegerNativeById),
+                    BindingFlags.NonPublic | BindingFlags.Static)!));
+            freeField.SetValue(null, Delegate.CreateDelegate(
+                freeField.FieldType,
+                typeof(UnitTest_RiscVExecution).GetMethod(
+                    nameof(FreeNativeExecutionResultForTest),
+                    BindingFlags.NonPublic | BindingFlags.Static)!));
+
+            var value = RiscVExecutionBridge.ExecuteBuiltinInteger(
+                new byte[] { 0x50, 0x56, 0x4d, 0x00 },
+                "test");
+
+            Assert.AreEqual(7L, value);
+            Assert.AreEqual(1, s_freedNativeIntegerErrors,
+                "The i64 fast-path error pointer should be released by the native result free callback.");
+        }
+        finally
+        {
+            freeField.SetValue(null, previousFree);
+            byIdField.SetValue(null, previousById);
+            i64Field.SetValue(null, previousI64);
+            initializedField.SetValue(null, previousInitialized);
+            s_freedNativeIntegerErrors = 0;
+        }
+    }
+
+    [TestMethod]
+    public void HostCallbackInputBytes_AllowsEmptyByteStrings()
+    {
+        var method = typeof(RiscVExecutionBridge).GetMethod(
+            "TryReadInputBytes",
+            BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Missing TryReadInputBytes.");
+        var itemSize = Marshal.SizeOf<TestNativeStackItem>();
+        var stackPtr = Marshal.AllocHGlobal(itemSize);
+
+        try
+        {
+            Marshal.StructureToPtr(new TestNativeStackItem
+            {
+                Kind = 1,
+                BytesPtr = IntPtr.Zero,
+                BytesLen = 0,
+            }, stackPtr, false);
+
+            object?[] args = [stackPtr, (nuint)1, 0, null!];
+            var ok = (bool)method.Invoke(null, args)!;
+
+            Assert.IsTrue(ok, "Empty byte strings should be valid byte-like arguments.");
+            CollectionAssert.AreEqual(Array.Empty<byte>(), (byte[])args[3]!);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(stackPtr);
+        }
+    }
+
+    private static FieldInfo GetBridgeField(string name)
+    {
+        return typeof(RiscVExecutionBridge).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"Missing RiscVExecutionBridge field: {name}");
+    }
+
+    private static bool ReturnFalseNativeContractBuiltin(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        IntPtr methodPtr,
+        nuint methodLen,
+        IntPtr initialStackPtr,
+        nuint initialStackLen,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output)
+    {
+        return false;
+    }
+
+    private static bool ValidateSerializedInitialStackNativeContract(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        IntPtr methodPtr,
+        nuint methodLen,
+        IntPtr initialStackPtr,
+        nuint initialStackLen,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr userData,
+        IntPtr hostCallback,
+        IntPtr hostFree,
+        IntPtr output)
+    {
+        var valid = initialStackPtr != IntPtr.Zero && initialStackLen == 1;
+        if (valid)
+        {
+            var item = Marshal.PtrToStructure<TestNativeStackItem>(initialStackPtr);
+            valid = item.Kind == 0 && item.IntegerValue == 42;
+        }
+
+        Marshal.StructureToPtr(new TestNativeExecutionResult
+        {
+            State = valid ? 0u : 1u,
+        }, output, false);
+        return true;
+    }
+
+    private static bool ReturnFaultNativeI64ById(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        uint methodId,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output)
+    {
+        var errorBytes = System.Text.Encoding.UTF8.GetBytes("i64 path fault");
+        var errorPtr = Marshal.AllocHGlobal(errorBytes.Length);
+        Marshal.Copy(errorBytes, 0, errorPtr, errorBytes.Length);
+        Marshal.StructureToPtr(new TestNativeIntegerExecutionResult
+        {
+            State = 1,
+            ErrorPtr = errorPtr,
+            ErrorLen = (nuint)errorBytes.Length,
+        }, output, false);
+        return true;
+    }
+
+    private static bool ReturnIntegerNativeById(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        uint methodId,
+        IntPtr initialStackPtr,
+        nuint initialStackLen,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output)
+    {
+        var itemSize = Marshal.SizeOf<TestNativeStackItem>();
+        var stackPtr = Marshal.AllocHGlobal(itemSize);
+        Marshal.StructureToPtr(new TestNativeStackItem
+        {
+            Kind = 0,
+            IntegerValue = 7,
+        }, stackPtr, false);
+        Marshal.StructureToPtr(new TestNativeExecutionResult
+        {
+            State = 0,
+            StackPtr = stackPtr,
+            StackLen = 1,
+        }, output, false);
+        return true;
+    }
+
+    private static void FreeNativeExecutionResultForTest(IntPtr resultPtr)
+    {
+        var result = Marshal.PtrToStructure<TestNativeExecutionResult>(resultPtr);
+        if (result.ErrorPtr != IntPtr.Zero)
+        {
+            Interlocked.Increment(ref s_freedNativeIntegerErrors);
+            Marshal.FreeHGlobal(result.ErrorPtr);
+        }
+        if (result.StackPtr != IntPtr.Zero)
+            Marshal.FreeHGlobal(result.StackPtr);
+    }
+
+    private static byte[] SerializeNativeStackItems(params TestNativeStackItem[] items)
+    {
+        var itemSize = Marshal.SizeOf<TestNativeStackItem>();
+        var bytes = new byte[itemSize * items.Length];
+        var ptr = Marshal.AllocHGlobal(bytes.Length);
+        try
+        {
+            for (var index = 0; index < items.Length; index++)
+                Marshal.StructureToPtr(items[index], IntPtr.Add(ptr, index * itemSize), false);
+            Marshal.Copy(ptr, bytes, 0, bytes.Length);
+            return bytes;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TestNativeStackItem
+    {
+        public uint Kind;
+        public long IntegerValue;
+        public IntPtr BytesPtr;
+        public nuint BytesLen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TestNativeExecutionResult
+    {
+        public long FeeConsumedPico;
+        public uint State;
+        public IntPtr StackPtr;
+        public nuint StackLen;
+        public IntPtr ErrorPtr;
+        public nuint ErrorLen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TestNativeIntegerExecutionResult
+    {
+        public long FeeConsumedPico;
+        public uint State;
+        public long Value;
+        public IntPtr ErrorPtr;
+        public nuint ErrorLen;
     }
 
     // -----------------------------------------------------------

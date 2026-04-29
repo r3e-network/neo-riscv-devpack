@@ -126,7 +126,7 @@ namespace Neo.SmartContract.Testing.Native
                 var method = native.GetType().GetMethod("OnPersistAsync", BindingFlags.NonPublic | BindingFlags.Instance);
 
                 DataCache clonedSnapshot = _engine.Storage.Snapshot.CloneCache();
-                using (var engine = new TestingApplicationEngine(_engine, TriggerType.OnPersist, genesis, clonedSnapshot, genesis))
+                using (var engine = _engine.CreateExecutionEngine(TriggerType.OnPersist, genesis, clonedSnapshot, genesis, _engine.Fee))
                 {
                     // Attach to static event
 
@@ -146,7 +146,7 @@ namespace Neo.SmartContract.Testing.Native
 
                 method = native.GetType().GetMethod("PostPersistAsync", BindingFlags.NonPublic | BindingFlags.Instance);
 
-                using (var engine = new TestingApplicationEngine(_engine, TriggerType.PostPersist, genesis, clonedSnapshot, genesis))
+                using (var engine = _engine.CreateExecutionEngine(TriggerType.PostPersist, genesis, clonedSnapshot, genesis, _engine.Fee))
                 {
                     // Attach to static event
 

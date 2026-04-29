@@ -13,13 +13,10 @@ namespace Neo.SmartContract.Testing;
 
 /// <summary>
 /// Selects which VM backend the test engine uses for contract execution.
-/// Set via the NEO_TEST_BACKEND environment variable:
-///   neovm (default) — standard NeoVM ApplicationEngine
-///   riscv — RISC-V PolkaVM via libneo_riscv_host.so
 /// </summary>
 public enum ExecutionBackend
 {
-    /// <summary>Standard NeoVM execution (default).</summary>
+    /// <summary>Host-side NeoVM execution for existing test compatibility.</summary>
     NeoVM = 0,
 
     /// <summary>RISC-V execution via PolkaVM native library.</summary>

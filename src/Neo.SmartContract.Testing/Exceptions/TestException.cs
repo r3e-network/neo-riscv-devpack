@@ -32,24 +32,13 @@ namespace Neo.SmartContract.Testing.Exceptions
         public ExecutionContext[] InvocationStack { get; }
 
         /// <summary>
-        /// Constructor
-        /// </summary>
-        /// <param name="engine">Test engine</param>
-        internal TestException(TestingApplicationEngine engine) : base(
-            engine.FaultException?.Message ?? $"Error while executing the script",
-            engine.FaultException ?? new Exception($"Error while executing the script"))
-        {
-            State = engine.State;
-            CurrentContext = engine.CurrentContext;
-            InvocationStack = engine.InvocationStack.ToArray();
-        }
-
-        /// <summary>
         /// Constructor for generic ApplicationEngine (used by RISC-V execution path)
         /// </summary>
         /// <param name="engine">Application engine</param>
         internal TestException(ApplicationEngine engine) : base(
-            engine.FaultException?.Message ?? $"Error while executing the script",
+            engine.FaultException?.GetBaseException().Message
+                ?? engine.FaultException?.Message
+                ?? $"Error while executing the script",
             engine.FaultException ?? new Exception($"Error while executing the script"))
         {
             State = engine.State;

@@ -64,11 +64,22 @@ namespace Neo.SmartContract.Testing
         {
             // Compose script
 
-            TestingSyscall? dynArgument = null;
             using ScriptBuilder script = new();
 
-            ConvertArgs(script, args, ref dynArgument);
+            if (RequiresDirectArgumentInjection(args))
+            {
+                script.EmitSysCall(ApplicationEngine.System_Contract_Call);
+                return Engine.Execute(script.ToArray(), beforeExecute: engine =>
+                {
+                    var context = engine.CurrentContext ?? throw new InvalidOperationException("Execution context is not initialized.");
+                    context.EvaluationStack.Push(CreateArgumentArray(engine, args));
+                    context.EvaluationStack.Push(engine.Convert(Engine.CallFlags));
+                    context.EvaluationStack.Push(engine.Convert(methodName));
+                    context.EvaluationStack.Push(engine.Convert(Hash));
+                });
+            }
 
+            ConvertArgs(script, args);
             script.EmitPush(Engine.CallFlags);
             script.EmitPush(methodName);
             script.EmitPush(Hash);
@@ -76,21 +87,83 @@ namespace Neo.SmartContract.Testing
 
             // Execute
 
-            return Engine.Execute(script.ToArray(), 0, dynArgument is null ? null : engine => ConfigureEngine(engine, dynArgument));
+            return Engine.Execute(script.ToArray());
         }
 
-        private static void ConfigureEngine(ApplicationEngine engine, TestingSyscall testingSyscall)
+        private static bool RequiresDirectArgumentInjection(object[]? args)
         {
-            if (engine is TestingApplicationEngine testEngine)
+            if (args is null) return false;
+
+            foreach (var arg in args)
             {
-                testEngine.TestingSyscall = testingSyscall;
+                if (arg is InteropInterface)
+                    return true;
+                if (arg is Action<ApplicationEngine>)
+                    return true;
+                if (arg is object[] nested && RequiresDirectArgumentInjection(nested))
+                    return true;
+                if (arg is IEnumerable<object> enumerable && RequiresDirectArgumentInjection(enumerable.ToArray()))
+                    return true;
             }
-            // RISC-V engines (RiscvApplicationEngine) do not support TestingSyscall.
-            // Dynamic argument injection is a NeoVM-only testing feature; skip silently
-            // when running under a non-testing engine backend.
+
+            return false;
         }
 
-        private static void ConvertArgs(ScriptBuilder script, object[] args, ref TestingSyscall? testingSyscall)
+        private static Neo.VM.Types.Array CreateArgumentArray(ApplicationEngine engine, object[] args)
+        {
+            var items = new StackItem[args.Length];
+            for (var index = 0; index < args.Length; index++)
+                items[index] = ConvertArgToStackItem(engine, args[index]);
+            return new Neo.VM.Types.Array(engine.ReferenceCounter, items);
+        }
+
+        private static StackItem ConvertArgToStackItem(ApplicationEngine engine, object? arg)
+        {
+            if (arg is object[] nestedArray)
+                return CreateArgumentArray(engine, nestedArray);
+            if (arg is IEnumerable<object> enumerable)
+                return CreateArgumentArray(engine, enumerable.ToArray());
+
+            if (ReferenceEquals(arg, InvalidTypes.InvalidUInt160.InvalidLength) ||
+                ReferenceEquals(arg, InvalidTypes.InvalidUInt256.InvalidLength) ||
+                ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidLength))
+            {
+                arg = System.Array.Empty<byte>();
+            }
+            else if (ReferenceEquals(arg, InvalidTypes.InvalidUInt160.InvalidType) ||
+                ReferenceEquals(arg, InvalidTypes.InvalidUInt256.InvalidType))
+            {
+                arg = BigInteger.Zero;
+            }
+            else if (ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidType))
+            {
+                arg = System.Array.Empty<byte>();
+            }
+            else if (arg is PrimitiveType primitive)
+            {
+                arg = primitive switch
+                {
+                    ByteString byteString => byteString.GetSpan().ToArray(),
+                    VM.Types.Boolean boolean => boolean.GetBoolean(),
+                    VM.Types.Integer integer => integer.GetInteger(),
+                    _ => primitive
+                };
+            }
+            else if (arg is Action<ApplicationEngine> onItem)
+            {
+                var context = engine.CurrentContext ?? throw new InvalidOperationException("Execution context is not initialized.");
+                var stackSize = context.EvaluationStack.Count;
+                onItem(engine);
+                if (context.EvaluationStack.Count != stackSize + 1)
+                    throw new InvalidOperationException(
+                        $"Action<ApplicationEngine> argument {onItem.Method.Name} must push exactly one stack item.");
+                return context.EvaluationStack.Pop();
+            }
+
+            return engine.Convert(arg);
+        }
+
+        private static void ConvertArgs(ScriptBuilder script, object[] args)
         {
             if (args is null || args.Length == 0)
                 script.Emit(OpCode.NEWARRAY0);
@@ -102,12 +175,12 @@ namespace Neo.SmartContract.Testing
 
                     if (arg is object[] arg2)
                     {
-                        ConvertArgs(script, arg2, ref testingSyscall);
+                        ConvertArgs(script, arg2);
                         continue;
                     }
                     else if (arg is IEnumerable<object> argEnumerable)
                     {
-                        ConvertArgs(script, argEnumerable.ToArray(), ref testingSyscall);
+                        ConvertArgs(script, argEnumerable.ToArray());
                         continue;
                     }
 
@@ -118,27 +191,23 @@ namespace Neo.SmartContract.Testing
                         arg = System.Array.Empty<byte>();
                     }
                     else if (ReferenceEquals(arg, InvalidTypes.InvalidUInt160.InvalidType) ||
-                        ReferenceEquals(arg, InvalidTypes.InvalidUInt256.InvalidType) ||
-                        ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidType))
+                        ReferenceEquals(arg, InvalidTypes.InvalidUInt256.InvalidType))
                     {
                         arg = BigInteger.Zero;
                     }
+                    else if (ReferenceEquals(arg, InvalidTypes.InvalidECPoint.InvalidType))
+                    {
+                        arg = System.Array.Empty<byte>();
+                    }
                     else if (arg is InteropInterface interop)
                     {
-                        // We can't send the interopInterface by an script
-                        // We create a syscall in order to detect it and push the item
-
-                        testingSyscall ??= new TestingSyscall();
-                        script.EmitSysCall(TestingSyscall.Hash, testingSyscall.Add((e) => e.Push(interop)));
-                        continue;
+                        throw new NotSupportedException(
+                            $"InteropInterface arguments are no longer supported in the RISC-V-only test runtime: {interop.GetType().Name}.");
                     }
                     else if (arg is Action<ApplicationEngine> onItem)
                     {
-                        // We create a syscall in order to detect it and push the item
-
-                        testingSyscall ??= new TestingSyscall();
-                        script.EmitSysCall(TestingSyscall.Hash, testingSyscall.Add((e) => onItem(e)));
-                        continue;
+                        throw new NotSupportedException(
+                            $"Action<ApplicationEngine> dynamic argument injection is no longer supported in the RISC-V-only test runtime: {onItem.Method.Name}.");
                     }
                     else if (arg is PrimitiveType)
                     {

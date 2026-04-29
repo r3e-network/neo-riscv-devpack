@@ -105,7 +105,10 @@ namespace Neo.SmartContract.Framework.UnitTests.Services
         [TestMethod]
         public void Test_GasLeft()
         {
-            Assert.AreEqual(1999015490, Contract.GetGasLeft());
+            if (Engine.Backend == ExecutionBackend.RiscV)
+                Assert.AreEqual(1999016480, Contract.GetGasLeft());
+            else
+                Assert.AreEqual(1999015490, Contract.GetGasLeft());
         }
 
         [TestMethod]

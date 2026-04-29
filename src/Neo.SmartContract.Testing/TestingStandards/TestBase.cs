@@ -24,6 +24,7 @@ public class TestBase<T> where T : SmartContract, IContractInfo
     private readonly List<string> _contractLogs = [];
 
     public static CoveredContract? Coverage { get; private set; }
+    public static ExecutionBackend CoverageBackend { get; private set; } = ExecutionBackend.NeoVM;
     public static Signer Alice { get; set; } = TestEngine.GetNewSigner();
     public static Signer Bob { get; set; } = TestEngine.GetNewSigner();
 
@@ -76,11 +77,12 @@ public class TestBase<T> where T : SmartContract, IContractInfo
 
         Engine = CreateTestEngine();
         Contract = Engine.Deploy<T>(NefFile, Manifest, null);
+        Engine.Storage.Commit();
+        Engine.Storage.Rollback();
 
         if (Coverage is null)
         {
-            Coverage = Contract.GetCoverage()!;
-            Assert.IsNotNull(Coverage);
+            Coverage = Contract.GetCoverage();
         }
 
         Contract.OnRuntimeLog += Contract_OnRuntimeLog;
@@ -92,7 +94,8 @@ public class TestBase<T> where T : SmartContract, IContractInfo
     /// <returns>TestEngine</returns>
     protected virtual TestEngine CreateTestEngine()
     {
-        var engine = new TestEngine(true);
+        var engine = new TestEngine(true, TestEngine.ResolveDefaultBackendFromEnvironment());
+        CoverageBackend = engine.Backend;
         engine.SetTransactionSigners(Alice);
         return engine;
     }

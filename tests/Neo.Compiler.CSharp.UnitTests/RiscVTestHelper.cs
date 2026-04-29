@@ -226,19 +226,6 @@ public static class RiscVTestHelper
                 return resolvedRoot;
         }
 
-        var legacyFallbacks = new[]
-        {
-            "/home/neo/git/neo-riscv-vm",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "git", "neo-riscv-vm"),
-        };
-
-        foreach (var candidate in legacyFallbacks)
-        {
-            var resolvedRoot = Path.GetFullPath(candidate);
-            if (HasRiscvVmCrates(resolvedRoot))
-                return resolvedRoot;
-        }
-
         return null;
     }
 

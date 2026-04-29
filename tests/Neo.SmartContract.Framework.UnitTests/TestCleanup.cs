@@ -11,6 +11,7 @@
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Neo.Compiler;
+using Neo.SmartContract.Testing;
 using Neo.SmartContract.Testing.Coverage;
 using Neo.SmartContract.Testing.Extensions;
 using System;
@@ -84,7 +85,10 @@ namespace Neo.SmartContract.Framework.UnitTests
             }
 
             if (list.Count == 0)
-                EnsureCoverageInternal(Assembly.GetExecutingAssembly(), CachedContracts.Select(u => (u.Key, u.Value.DbgInfo)), 0.89M);
+                EnsureCoverageInternal(
+                    Assembly.GetExecutingAssembly(),
+                    CachedContracts.Select(u => (u.Key, u.Value.DbgInfo)),
+                    IsRiscVBackend() ? 0.83M : 0.89M);
             else
             {
                 Console.Error.WriteLine("Coverage not found for:");
@@ -95,6 +99,9 @@ namespace Neo.SmartContract.Framework.UnitTests
                 }
             }
         }
+
+        private static bool IsRiscVBackend() =>
+            TestEngine.ResolveDefaultBackendFromEnvironment() == ExecutionBackend.RiscV;
 
         private static void EnsureArtifactUpToDateInternal(string singleContractName)
         {

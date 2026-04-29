@@ -10,6 +10,7 @@
 // modifications are permitted.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -33,7 +34,7 @@ public static class RiscVExecutionBridge
     // ---------------------------------------------------------------
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeStackItem
+    internal struct NativeStackItem
     {
         public uint Kind;           // 0=Integer, 1=ByteString, 2=Null, 3=Boolean, 4=Array, 5=BigInteger, 6=Iterator, 7=Struct, 8=Map, 9=Interop
         public long IntegerValue;
@@ -49,6 +50,16 @@ public static class RiscVExecutionBridge
         public IntPtr StackPtr;      // *mut NativeStackItem
         public nuint StackLen;
         public IntPtr ErrorPtr;      // *mut u8 (UTF-8)
+        public nuint ErrorLen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeIntegerExecutionResult
+    {
+        public long FeeConsumedPico;
+        public uint State;
+        public long Value;
+        public IntPtr ErrorPtr;
         public nuint ErrorLen;
     }
 
@@ -78,12 +89,12 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,    // *const NativeStackItem
         nuint inputStackLen,
-        out NativeHostResult output);
+        IntPtr output);          // *mut NativeHostResult
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void HostFreeCallbackDelegate(
         IntPtr userData,
-        ref NativeHostResult result);
+        IntPtr result);          // *mut NativeHostResult
 
     // ---------------------------------------------------------------
     //  Native function delegate types
@@ -110,6 +121,53 @@ public static class RiscVExecutionBridge
         IntPtr output);          // *mut NativeExecutionResult
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool ExecuteNativeContractBuiltinDelegate(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        IntPtr methodPtr,
+        nuint methodLen,
+        IntPtr initialStackPtr,
+        nuint initialStackLen,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool ExecuteNativeContractBuiltinByIdDelegate(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        uint methodId,
+        IntPtr initialStackPtr,
+        nuint initialStackLen,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool ExecuteNativeContractBuiltinI64ByIdDelegate(
+        IntPtr binaryPtr,
+        nuint binaryLen,
+        uint methodId,
+        byte trigger,
+        uint network,
+        byte addressVersion,
+        ulong timestamp,
+        long gasLeft,
+        long execFeeFactorPico,
+        IntPtr output);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeExecutionResultDelegate(
         IntPtr result);          // *mut NativeExecutionResult
 
@@ -119,6 +177,9 @@ public static class RiscVExecutionBridge
 
     private static IntPtr s_libraryHandle;
     private static ExecuteNativeContractDelegate? s_executeNativeContract;
+    private static ExecuteNativeContractBuiltinDelegate? s_executeNativeContractBuiltin;
+    private static ExecuteNativeContractBuiltinByIdDelegate? s_executeNativeContractBuiltinById;
+    private static ExecuteNativeContractBuiltinI64ByIdDelegate? s_executeNativeContractBuiltinI64ById;
     private static FreeExecutionResultDelegate? s_freeExecutionResult;
 
     // Prevent GC of delegates whose function pointers are passed to native code.
@@ -156,6 +217,21 @@ public static class RiscVExecutionBridge
 
         s_executeNativeContract = Marshal.GetDelegateForFunctionPointer<ExecuteNativeContractDelegate>(
             NativeLibrary.GetExport(s_libraryHandle, "neo_riscv_execute_native_contract"));
+        if (NativeLibrary.TryGetExport(s_libraryHandle, "neo_riscv_execute_native_contract_builtin", out var builtinExport))
+        {
+            s_executeNativeContractBuiltin =
+                Marshal.GetDelegateForFunctionPointer<ExecuteNativeContractBuiltinDelegate>(builtinExport);
+        }
+        if (NativeLibrary.TryGetExport(s_libraryHandle, "neo_riscv_execute_native_contract_builtin_by_id", out var builtinByIdExport))
+        {
+            s_executeNativeContractBuiltinById =
+                Marshal.GetDelegateForFunctionPointer<ExecuteNativeContractBuiltinByIdDelegate>(builtinByIdExport);
+        }
+        if (NativeLibrary.TryGetExport(s_libraryHandle, "neo_riscv_execute_native_contract_builtin_i64_by_id", out var builtinI64ByIdExport))
+        {
+            s_executeNativeContractBuiltinI64ById =
+                Marshal.GetDelegateForFunctionPointer<ExecuteNativeContractBuiltinI64ByIdDelegate>(builtinI64ByIdExport);
+        }
         s_freeExecutionResult = Marshal.GetDelegateForFunctionPointer<FreeExecutionResultDelegate>(
             NativeLibrary.GetExport(s_libraryHandle, "neo_riscv_free_execution_result"));
 
@@ -200,7 +276,10 @@ public static class RiscVExecutionBridge
     /// </summary>
     public static ExecutionResult Execute(byte[] binary, string method)
     {
-        return Execute(binary, method, ReadOnlySpan<byte>.Empty, 0);
+        var result = ExecuteBuiltin(binary, method);
+        if (ShouldRetryWithLowerCamelAlias(method, result, out var fallbackMethod))
+            return ExecuteBuiltin(binary, fallbackMethod!);
+        return result;
     }
 
     /// <summary>
@@ -214,10 +293,13 @@ public static class RiscVExecutionBridge
     {
         if (!s_initialized)
             throw new InvalidOperationException("RiscVDirectRunner.Initialize() has not been called.");
+        if (initialStackItemCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(initialStackItemCount));
 
         var binaryHandle = GCHandle.Alloc(binary, GCHandleType.Pinned);
         var methodBytes = Encoding.UTF8.GetBytes(method);
         var methodHandle = GCHandle.Alloc(methodBytes, GCHandleType.Pinned);
+        var initialStackPtr = IntPtr.Zero;
 
         // Allocate the output struct on unmanaged heap so we can pass a stable pointer.
         var resultSize = Marshal.SizeOf<NativeExecutionResult>();
@@ -235,8 +317,8 @@ public static class RiscVExecutionBridge
                 (nuint)binary.Length,
                 methodHandle.AddrOfPinnedObject(),
                 (nuint)methodBytes.Length,
-                IntPtr.Zero,           // no initial stack for now
-                0,
+                initialStackPtr = MarshalSerializedInitialStack(serializedInitialStack, initialStackItemCount),
+                (nuint)initialStackItemCount,
                 0x40,                  // TriggerType.Application
                 860833102u,            // Neo N3 MainNet magic
                 53,                    // address version
@@ -269,13 +351,18 @@ public static class RiscVExecutionBridge
 
             var stack = ReadResultStack(nativeResult.StackPtr, nativeResult.StackLen);
 
-            return new ExecutionResult
+            var result = new ExecutionResult
             {
                 State = nativeResult.State,
                 FeeConsumedPico = nativeResult.FeeConsumedPico,
                 Error = error,
                 Stack = stack,
             };
+
+            if (ShouldRetryWithLowerCamelAlias(method, result, out var fallbackMethod))
+                return Execute(binary, fallbackMethod!, serializedInitialStack, initialStackItemCount);
+
+            return result;
         }
         finally
         {
@@ -286,9 +373,379 @@ public static class RiscVExecutionBridge
                 s_freeExecutionResult!(resultPtr);
             }
             Marshal.FreeHGlobal(resultPtr);
+            if (initialStackPtr != IntPtr.Zero)
+                Marshal.FreeHGlobal(initialStackPtr);
 
             methodHandle.Free();
             binaryHandle.Free();
+        }
+    }
+
+    public static ExecutionResult ExecuteBuiltin(byte[] binary, string method)
+    {
+        if (!s_initialized)
+            throw new InvalidOperationException("RiscVDirectRunner.Initialize() has not been called.");
+        if (s_executeNativeContractBuiltin == null)
+            return Execute(binary, method, ReadOnlySpan<byte>.Empty, 0);
+
+        var binaryHandle = GCHandle.Alloc(binary, GCHandleType.Pinned);
+        var methodBytes = Encoding.UTF8.GetBytes(method);
+        var methodHandle = GCHandle.Alloc(methodBytes, GCHandleType.Pinned);
+        var resultSize = Marshal.SizeOf<NativeExecutionResult>();
+        var resultPtr = Marshal.AllocHGlobal(resultSize);
+        {
+            var zero = new byte[resultSize];
+            Marshal.Copy(zero, 0, resultPtr, resultSize);
+        }
+
+        try
+        {
+            var ok = s_executeNativeContractBuiltin!(
+                binaryHandle.AddrOfPinnedObject(),
+                (nuint)binary.Length,
+                methodHandle.AddrOfPinnedObject(),
+                (nuint)methodBytes.Length,
+                IntPtr.Zero,
+                0,
+                0x40,
+                860833102u,
+                53,
+                0,
+                10_000_000_000_000L,
+                30_000L,
+                resultPtr);
+
+            var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
+            if (!ok)
+            {
+                return new ExecutionResult
+                {
+                    State = 1,
+                    FeeConsumedPico = nativeResult.FeeConsumedPico,
+                    Error = "neo_riscv_execute_native_contract_builtin returned false.",
+                    Stack = Array.Empty<ResultStackItem>(),
+                };
+            }
+
+            string? error = null;
+            if (nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0)
+                error = Marshal.PtrToStringUTF8(nativeResult.ErrorPtr, checked((int)nativeResult.ErrorLen));
+
+            var stack = ReadResultStack(nativeResult.StackPtr, nativeResult.StackLen);
+            var result = new ExecutionResult
+            {
+                State = nativeResult.State,
+                FeeConsumedPico = nativeResult.FeeConsumedPico,
+                Error = error,
+                Stack = stack,
+            };
+
+            if (ShouldRetryWithLowerCamelAlias(method, result, out var fallbackMethod))
+                return ExecuteBuiltin(binary, fallbackMethod!);
+
+            return result;
+        }
+        finally
+        {
+            var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
+            if (nativeResult.StackPtr != IntPtr.Zero || nativeResult.ErrorPtr != IntPtr.Zero)
+                s_freeExecutionResult!(resultPtr);
+            Marshal.FreeHGlobal(resultPtr);
+            methodHandle.Free();
+            binaryHandle.Free();
+        }
+    }
+
+    public static long ExecuteBuiltinInteger(byte[] binary, string method)
+    {
+        if (!s_initialized)
+            throw new InvalidOperationException("RiscVDirectRunner.Initialize() has not been called.");
+        if (s_executeNativeContractBuiltinI64ById != null)
+        {
+            var binaryHandle = GCHandle.Alloc(binary, GCHandleType.Pinned);
+            var methodId = ComputeMethodId(method);
+            var resultSize = Marshal.SizeOf<NativeIntegerExecutionResult>();
+            var resultPtr = Marshal.AllocHGlobal(resultSize);
+            {
+                var zero = new byte[resultSize];
+                Marshal.Copy(zero, 0, resultPtr, resultSize);
+            }
+
+            try
+            {
+                var ok = s_executeNativeContractBuiltinI64ById!(
+                    binaryHandle.AddrOfPinnedObject(),
+                    (nuint)binary.Length,
+                    methodId,
+                    0x40,
+                    860833102u,
+                    53,
+                    0,
+                    10_000_000_000_000L,
+                    30_000L,
+                    resultPtr);
+
+                var nativeResult = Marshal.PtrToStructure<NativeIntegerExecutionResult>(resultPtr);
+                if (!ok)
+                    throw new InvalidOperationException("neo_riscv_execute_native_contract_builtin_i64_by_id returned false.");
+                if (nativeResult.State == 0)
+                    return nativeResult.Value;
+            }
+            finally
+            {
+                var nativeResult = Marshal.PtrToStructure<NativeIntegerExecutionResult>(resultPtr);
+                FreeNativeIntegerError(nativeResult);
+                Marshal.FreeHGlobal(resultPtr);
+                binaryHandle.Free();
+            }
+        }
+
+        if (s_executeNativeContractBuiltinById == null)
+        {
+            var result = ExecuteBuiltin(binary, method);
+            if (result.IsFault)
+                throw new InvalidOperationException(result.Error ?? "Native RISC-V direct execution fault.");
+            if (result.Stack.Length != 1 || result.Stack[0].Kind != 0)
+                throw new InvalidOperationException($"Expected a single integer result for {method}.");
+            return result.Stack[0].IntegerValue;
+        }
+
+        var binaryHandleFallback = GCHandle.Alloc(binary, GCHandleType.Pinned);
+        var methodIdFallback = ComputeMethodId(method);
+        var fallbackSize = Marshal.SizeOf<NativeExecutionResult>();
+        var fallbackPtr = Marshal.AllocHGlobal(fallbackSize);
+        {
+            var zero = new byte[fallbackSize];
+            Marshal.Copy(zero, 0, fallbackPtr, fallbackSize);
+        }
+
+        try
+        {
+            var ok = s_executeNativeContractBuiltinById!(
+                binaryHandleFallback.AddrOfPinnedObject(),
+                (nuint)binary.Length,
+                methodIdFallback,
+                IntPtr.Zero,
+                0,
+                0x40,
+                860833102u,
+                53,
+                0,
+                10_000_000_000_000L,
+                30_000L,
+                fallbackPtr);
+
+            var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(fallbackPtr);
+            if (!ok)
+                throw new InvalidOperationException("neo_riscv_execute_native_contract_builtin_by_id returned false.");
+            if (nativeResult.State != 0)
+            {
+                var error = nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0
+                    ? Marshal.PtrToStringUTF8(nativeResult.ErrorPtr, checked((int)nativeResult.ErrorLen))
+                    : "Native RISC-V direct execution fault.";
+                throw new InvalidOperationException(error);
+            }
+
+            if (nativeResult.StackLen != 1 || nativeResult.StackPtr == IntPtr.Zero)
+                throw new InvalidOperationException($"Expected a single stack item for {method}.");
+
+            var item = Marshal.PtrToStructure<NativeStackItem>(nativeResult.StackPtr);
+            if (item.Kind != 0)
+                throw new InvalidOperationException($"Expected integer result kind for {method}, got {item.Kind}.");
+
+            return item.IntegerValue;
+        }
+        finally
+        {
+            var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(fallbackPtr);
+            if (nativeResult.StackPtr != IntPtr.Zero || nativeResult.ErrorPtr != IntPtr.Zero)
+                s_freeExecutionResult!(fallbackPtr);
+            Marshal.FreeHGlobal(fallbackPtr);
+            binaryHandleFallback.Free();
+        }
+    }
+
+    private static bool ShouldRetryWithLowerCamelAlias(string method, ExecutionResult result, out string? fallbackMethod)
+    {
+        fallbackMethod = GetLowerCamelAlias(method);
+        return fallbackMethod != null
+            && result.IsFault
+            && string.Equals(result.Error, "Unknown method", StringComparison.Ordinal);
+    }
+
+    private static string? GetLowerCamelAlias(string method)
+    {
+        if (string.IsNullOrEmpty(method))
+            return null;
+
+        var first = method[0];
+        if (!char.IsUpper(first))
+            return null;
+
+        var lowered = char.ToLowerInvariant(first);
+        if (lowered == first)
+            return null;
+
+        return lowered + method.Substring(1);
+    }
+
+    public sealed class BuiltinIntegerInvoker : IDisposable
+    {
+        private readonly GCHandle _binaryHandle;
+        private readonly int _binaryLength;
+        private readonly uint _methodId;
+        private readonly string _method;
+        private readonly IntPtr _resultPtr;
+        private readonly int _resultSize;
+        private bool _preferI64Path = true;
+
+        public BuiltinIntegerInvoker(byte[] binary, string method)
+        {
+            if (!s_initialized)
+                throw new InvalidOperationException("RiscVDirectRunner.Initialize() has not been called.");
+            if (s_executeNativeContractBuiltinById == null)
+                throw new InvalidOperationException("Builtin-by-id native contract entry is not available.");
+
+            _binaryHandle = GCHandle.Alloc(binary, GCHandleType.Pinned);
+            _binaryLength = binary.Length;
+            _methodId = ComputeMethodId(method);
+            _method = method;
+            _resultSize = Marshal.SizeOf<NativeExecutionResult>();
+            _resultPtr = Marshal.AllocHGlobal(_resultSize);
+            ZeroResultBuffer();
+        }
+
+        public long Invoke()
+        {
+            if (_preferI64Path && s_executeNativeContractBuiltinI64ById != null)
+            {
+                var intResultSize = Marshal.SizeOf<NativeIntegerExecutionResult>();
+                var intResultPtr = Marshal.AllocHGlobal(intResultSize);
+                try
+                {
+                    var zero = new byte[intResultSize];
+                    Marshal.Copy(zero, 0, intResultPtr, intResultSize);
+
+                    var intOk = s_executeNativeContractBuiltinI64ById!(
+                        _binaryHandle.AddrOfPinnedObject(),
+                        (nuint)_binaryLength,
+                        _methodId,
+                        0x40,
+                        860833102u,
+                        53,
+                        0,
+                        10_000_000_000_000L,
+                        30_000L,
+                        intResultPtr);
+
+                    var nativeIntResult = Marshal.PtrToStructure<NativeIntegerExecutionResult>(intResultPtr);
+                    if (!intOk)
+                        throw new InvalidOperationException("neo_riscv_execute_native_contract_builtin_i64_by_id returned false.");
+                    if (nativeIntResult.State == 0)
+                        return nativeIntResult.Value;
+
+                    _preferI64Path = false;
+                }
+                finally
+                {
+                    var nativeIntResult = Marshal.PtrToStructure<NativeIntegerExecutionResult>(intResultPtr);
+                    FreeNativeIntegerError(nativeIntResult);
+                    Marshal.FreeHGlobal(intResultPtr);
+                }
+            }
+
+            ZeroResultBuffer();
+
+            var ok = s_executeNativeContractBuiltinById!(
+                _binaryHandle.AddrOfPinnedObject(),
+                (nuint)_binaryLength,
+                _methodId,
+                IntPtr.Zero,
+                0,
+                0x40,
+                860833102u,
+                53,
+                0,
+                10_000_000_000_000L,
+                30_000L,
+                _resultPtr);
+
+            var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(_resultPtr);
+            try
+            {
+                if (!ok)
+                    throw new InvalidOperationException("neo_riscv_execute_native_contract_builtin_by_id returned false.");
+                if (nativeResult.State != 0)
+                {
+                    var error = nativeResult.ErrorPtr != IntPtr.Zero && nativeResult.ErrorLen > 0
+                        ? Marshal.PtrToStringUTF8(nativeResult.ErrorPtr, checked((int)nativeResult.ErrorLen))
+                        : "Native RISC-V direct execution fault.";
+                    throw new InvalidOperationException(error);
+                }
+
+                if (nativeResult.StackLen != 1 || nativeResult.StackPtr == IntPtr.Zero)
+                    throw new InvalidOperationException("Expected a single stack item.");
+
+                var item = Marshal.PtrToStructure<NativeStackItem>(nativeResult.StackPtr);
+                if (item.Kind != 0)
+                    throw new InvalidOperationException($"Expected integer result kind, got {item.Kind}.");
+
+                return item.IntegerValue;
+            }
+            finally
+            {
+                if (nativeResult.StackPtr != IntPtr.Zero || nativeResult.ErrorPtr != IntPtr.Zero)
+                    s_freeExecutionResult!(_resultPtr);
+            }
+        }
+
+        private void ZeroResultBuffer()
+        {
+            var zero = new byte[_resultSize];
+            Marshal.Copy(zero, 0, _resultPtr, _resultSize);
+        }
+
+        public void Dispose()
+        {
+            Marshal.FreeHGlobal(_resultPtr);
+            if (_binaryHandle.IsAllocated)
+                _binaryHandle.Free();
+        }
+    }
+
+    private static uint ComputeMethodId(string method)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (var ch in method)
+            {
+                hash ^= ch;
+                hash *= 16777619;
+            }
+            return hash;
+        }
+    }
+
+    private static void FreeNativeIntegerError(NativeIntegerExecutionResult result)
+    {
+        if (result.ErrorPtr == IntPtr.Zero)
+            return;
+
+        var freeResultSize = Marshal.SizeOf<NativeExecutionResult>();
+        var freeResultPtr = Marshal.AllocHGlobal(freeResultSize);
+        try
+        {
+            Marshal.StructureToPtr(new NativeExecutionResult
+            {
+                ErrorPtr = result.ErrorPtr,
+                ErrorLen = result.ErrorLen,
+            }, freeResultPtr, false);
+            s_freeExecutionResult!(freeResultPtr);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(freeResultPtr);
         }
     }
 
@@ -313,13 +770,24 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,
         nuint inputStackLen,
-        out NativeHostResult output)
+        IntPtr output)
     {
-        output = CreateEmptyOutput();
+        // Write a NativeHostResult with empty stack to the output pointer.
+        if (output != IntPtr.Zero)
+        {
+            var result = new NativeHostResult
+            {
+                StackPtr = IntPtr.Zero,
+                StackLen = 0,
+                ErrorPtr = IntPtr.Zero,
+                ErrorLen = 0,
+            };
+            Marshal.StructureToPtr(result, output, false);
+        }
         return true;
     }
 
-    private static void DummyHostFree(IntPtr userData, ref NativeHostResult result)
+    private static void DummyHostFree(IntPtr userData, IntPtr result)
     {
         // The dummy callback allocates nothing, so nothing to free.
     }
@@ -392,6 +860,10 @@ public static class RiscVExecutionBridge
         /// <summary>Delegate to handle Contract.Call. Return null for default (empty).</summary>
         public Func<byte[], string, ResultStackItem[], ResultStackItem[]?>? OnContractCall { get; set; }
 
+        private ulong _nextHandle = 1;
+        private readonly Dictionary<ulong, TestStorageContext> _storageContexts = new();
+        private readonly Dictionary<ulong, TestIteratorState> _iterators = new();
+
         /// <summary>
         /// Execute a RISC-V contract with this host callback providing syscall support.
         /// </summary>
@@ -406,6 +878,142 @@ public static class RiscVExecutionBridge
         public ExecutionResult Execute(byte[] binary, string method, ResultStackItem[] initialArgs)
         {
             return ExecuteWithHost(binary, method, initialArgs, this);
+        }
+
+        internal bool TryGetStorageValue(NativeStackItem keyItem, out byte[] value)
+        {
+            foreach (var entry in Storage)
+            {
+                if (InputBytesEqual(keyItem, entry.Key))
+                {
+                    value = entry.Value;
+                    return true;
+                }
+            }
+
+            value = Array.Empty<byte>();
+            return false;
+        }
+
+        internal void PutStorageValue(byte[] key, byte[] value)
+        {
+            Storage[key] = value;
+        }
+
+        internal void RemoveStorageValue(NativeStackItem keyItem)
+        {
+            byte[]? match = null;
+            foreach (var entry in Storage)
+            {
+                if (InputBytesEqual(keyItem, entry.Key))
+                {
+                    match = entry.Key;
+                    break;
+                }
+            }
+
+            if (match != null)
+                Storage.Remove(match);
+        }
+
+        internal ulong CreateStorageContext(bool isReadOnly)
+        {
+            var handle = _nextHandle++;
+            _storageContexts[handle] = new TestStorageContext(isReadOnly);
+            return handle;
+        }
+
+        internal bool TryGetStorageContext(NativeStackItem item, out TestStorageContext context)
+        {
+            if (item.Kind == 9 && item.IntegerValue > 0 &&
+                _storageContexts.TryGetValue((ulong)item.IntegerValue, out var found))
+            {
+                context = found;
+                return true;
+            }
+
+            context = default;
+            return false;
+        }
+
+        internal ulong CreateIterator(byte[] prefix, int options)
+        {
+            var removePrefix = (options & 0x02) != 0;
+            var keysOnly = (options & 0x01) != 0;
+            var valuesOnly = (options & 0x04) != 0;
+            var items = new List<ResultStackItem>();
+
+            foreach (var entry in Storage)
+            {
+                if (!StartsWith(entry.Key, prefix))
+                    continue;
+
+                var key = removePrefix ? entry.Key[prefix.Length..] : entry.Key;
+                var keyItem = new ResultStackItem { Kind = 1, Bytes = key };
+                var valueItem = new ResultStackItem { Kind = 1, Bytes = entry.Value };
+                items.Add(valuesOnly
+                    ? valueItem
+                    : keysOnly
+                        ? keyItem
+                        : new ResultStackItem { Kind = 4, Children = [keyItem, valueItem] });
+            }
+
+            var handle = _nextHandle++;
+            _iterators[handle] = new TestIteratorState(items);
+            return handle;
+        }
+
+        internal bool IteratorNext(NativeStackItem item)
+        {
+            return item.Kind == 6 && item.IntegerValue > 0 &&
+                _iterators.TryGetValue((ulong)item.IntegerValue, out var iterator) &&
+                iterator.Next();
+        }
+
+        internal ResultStackItem IteratorValue(NativeStackItem item)
+        {
+            if (item.Kind != 6 || item.IntegerValue <= 0 ||
+                !_iterators.TryGetValue((ulong)item.IntegerValue, out var iterator))
+                throw new InvalidOperationException("Iterator handle is not recognized.");
+
+            return iterator.Value ?? new ResultStackItem { Kind = 2 };
+        }
+
+        private static bool StartsWith(byte[] value, byte[] prefix)
+        {
+            if (prefix.Length > value.Length)
+                return false;
+            for (var i = 0; i < prefix.Length; i++)
+            {
+                if (value[i] != prefix[i])
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    public readonly record struct TestStorageContext(bool IsReadOnly);
+
+    private sealed class TestIteratorState
+    {
+        private readonly List<ResultStackItem> _items;
+        private int _index = -1;
+
+        public TestIteratorState(List<ResultStackItem> items)
+        {
+            _items = items;
+        }
+
+        public ResultStackItem? Value =>
+            _index >= 0 && _index < _items.Count ? _items[_index] : null;
+
+        public bool Next()
+        {
+            if (_index + 1 >= _items.Count)
+                return false;
+
+            _index++;
+            return true;
         }
     }
 
@@ -445,8 +1053,6 @@ public static class RiscVExecutionBridge
             freeCallback = DummyHostFree;
         }
 
-        var callbackHandle = GCHandle.Alloc(callback);
-        var freeCallbackHandle = GCHandle.Alloc(freeCallback);
         var callbackPtr = Marshal.GetFunctionPointerForDelegate(callback);
         var freePtr = Marshal.GetFunctionPointerForDelegate(freeCallback);
 
@@ -484,7 +1090,6 @@ public static class RiscVExecutionBridge
                 resultPtr);
 
             var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
-
             if (!ok)
             {
                 return new ExecutionResult
@@ -504,13 +1109,18 @@ public static class RiscVExecutionBridge
 
             var stack = ReadResultStack(nativeResult.StackPtr, nativeResult.StackLen);
 
-            return new ExecutionResult
+            var result = new ExecutionResult
             {
                 State = nativeResult.State,
                 FeeConsumedPico = nativeResult.FeeConsumedPico,
                 Error = error,
                 Stack = stack,
             };
+
+            if (ShouldRetryWithLowerCamelAlias(method, result, out var fallbackMethod))
+                return ExecuteWithHost(binary, fallbackMethod!, host);
+
+            return result;
         }
         finally
         {
@@ -525,8 +1135,6 @@ public static class RiscVExecutionBridge
             binaryHandle.Free();
             if (hostHandle.IsAllocated)
                 hostHandle.Free();
-            callbackHandle.Free();
-            freeCallbackHandle.Free();
         }
     }
 
@@ -559,8 +1167,6 @@ public static class RiscVExecutionBridge
             freeCallback = DummyHostFree;
         }
 
-        var callbackHandle = GCHandle.Alloc(callback);
-        var freeCallbackHandle = GCHandle.Alloc(freeCallback);
         var callbackPtr = Marshal.GetFunctionPointerForDelegate(callback);
         var freePtr = Marshal.GetFunctionPointerForDelegate(freeCallback);
 
@@ -631,7 +1237,6 @@ public static class RiscVExecutionBridge
                 resultPtr);
 
             var nativeResult = Marshal.PtrToStructure<NativeExecutionResult>(resultPtr);
-
             if (!ok)
             {
                 return new ExecutionResult
@@ -651,13 +1256,18 @@ public static class RiscVExecutionBridge
 
             var stack = ReadResultStack(nativeResult.StackPtr, nativeResult.StackLen);
 
-            return new ExecutionResult
+            var result = new ExecutionResult
             {
                 State = nativeResult.State,
                 FeeConsumedPico = nativeResult.FeeConsumedPico,
                 Error = error,
                 Stack = stack,
             };
+
+            if (ShouldRetryWithLowerCamelAlias(method, result, out var fallbackMethod))
+                return ExecuteWithHost(binary, fallbackMethod!, initialArgs, host);
+
+            return result;
         }
         finally
         {
@@ -676,8 +1286,6 @@ public static class RiscVExecutionBridge
             binaryHandle.Free();
             if (hostHandle.IsAllocated)
                 hostHandle.Free();
-            callbackHandle.Free();
-            freeCallbackHandle.Free();
         }
     }
 
@@ -713,71 +1321,238 @@ public static class RiscVExecutionBridge
         return bytes;
     }
 
+    private static NativeStackItem ReadInputItem(IntPtr ptr, nuint len, int index)
+    {
+        if (ptr == IntPtr.Zero || index < 0 || index >= (int)len)
+            return default;
+        var itemSize = Marshal.SizeOf<NativeStackItem>();
+        return Marshal.PtrToStructure<NativeStackItem>(IntPtr.Add(ptr, index * itemSize));
+    }
+
+    private static IntPtr MarshalSerializedInitialStack(ReadOnlySpan<byte> serializedInitialStack, int initialStackItemCount)
+    {
+        if (initialStackItemCount == 0)
+            return IntPtr.Zero;
+
+        var expectedLength = checked(Marshal.SizeOf<NativeStackItem>() * initialStackItemCount);
+        if (serializedInitialStack.Length < expectedLength)
+            throw new ArgumentException("Serialized initial stack is shorter than the declared item count.", nameof(serializedInitialStack));
+
+        var stackPtr = Marshal.AllocHGlobal(expectedLength);
+        Marshal.Copy(serializedInitialStack[..expectedLength].ToArray(), 0, stackPtr, expectedLength);
+        return stackPtr;
+    }
+
+    private static bool TryReadInputBytes(IntPtr ptr, nuint len, int index, out byte[] bytes)
+    {
+        var item = ReadInputItem(ptr, len, index);
+        if (item.Kind != 1)
+        {
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+
+        if (item.BytesLen == 0)
+        {
+            bytes = Array.Empty<byte>();
+            return true;
+        }
+
+        if (item.BytesPtr == IntPtr.Zero)
+        {
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+
+        bytes = new byte[(int)item.BytesLen];
+        Marshal.Copy(item.BytesPtr, bytes, 0, bytes.Length);
+        return true;
+    }
+
+    private static bool IsByteStringItem(NativeStackItem item)
+    {
+        return item.Kind == 1 && (item.BytesLen == 0 || item.BytesPtr != IntPtr.Zero);
+    }
+
+    private static bool TryReadInputInteger(IntPtr ptr, nuint len, int index, out long value)
+    {
+        var item = ReadInputItem(ptr, len, index);
+        if (item.Kind == 0 || item.Kind == 3)
+        {
+            value = item.IntegerValue;
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryReadStorageContext(
+        TestHostCallback host,
+        IntPtr ptr,
+        nuint len,
+        int index,
+        out TestStorageContext context)
+    {
+        return host.TryGetStorageContext(ReadInputItem(ptr, len, index), out context);
+    }
+
+    private static bool InputBytesEqual(NativeStackItem item, byte[] managed)
+    {
+        if (item.BytesPtr == IntPtr.Zero)
+            return managed.Length == 0;
+        if ((int)item.BytesLen != managed.Length)
+            return false;
+        for (var i = 0; i < managed.Length; i++)
+        {
+            if (Marshal.ReadByte(item.BytesPtr, i) != managed[i])
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
-    /// Writes a single NativeStackItem result to the output NativeHostResult.
+    /// Allocates a NativeStackItem on unmanaged heap and writes the result.
+    /// Caller must free via TestHostFreeImpl.
     /// </summary>
-    private static NativeHostResult CreateSingleOutput(uint kind, long integerValue, byte[]? bytes)
+    private static IntPtr AllocateResultItem(uint kind, long integerValue, byte[]? bytes)
     {
         var itemSize = Marshal.SizeOf<NativeStackItem>();
-        var arrayPtr = Marshal.AllocHGlobal(itemSize);
-        Marshal.Copy(new byte[itemSize], 0, arrayPtr, itemSize);
-
-        var item = new NativeStackItem
-        {
-            Kind = kind,
-            IntegerValue = integerValue,
-        };
+        var ptr = Marshal.AllocHGlobal(itemSize);
+        var item = new NativeStackItem { Kind = kind, IntegerValue = integerValue };
 
         if (bytes != null && bytes.Length > 0)
         {
-            var bytesPtr = Marshal.AllocHGlobal(bytes.Length);
-            Marshal.Copy(bytes, 0, bytesPtr, bytes.Length);
+            var bytesHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            var bytesPtr = bytesHandle.AddrOfPinnedObject();
+            s_pinnedByteHandles[bytesPtr] = bytesHandle;
+            item.BytesPtr = bytesPtr;
+            item.BytesLen = (nuint)bytes.Length;
+        }
+
+        Marshal.StructureToPtr(item, ptr, false);
+        return ptr;
+    }
+
+    /// <summary>
+    /// Writes a single NativeStackItem result to the output NativeHostResult.
+    /// </summary>
+    private static void WriteOutputSingle(IntPtr output, uint kind, long integerValue, byte[]? bytes)
+    {
+        if (output == IntPtr.Zero) return;
+        if ((bytes == null || bytes.Length == 0) && TryWriteCachedSingle(output, kind, integerValue))
+            return;
+        var itemSize = Marshal.SizeOf<NativeStackItem>();
+        var arrayPtr = Marshal.AllocHGlobal(itemSize);
+        var item = new NativeStackItem { Kind = kind, IntegerValue = integerValue };
+
+        if (bytes != null && bytes.Length > 0)
+        {
+            var bytesHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            var bytesPtr = bytesHandle.AddrOfPinnedObject();
+            s_pinnedByteHandles[bytesPtr] = bytesHandle;
             item.BytesPtr = bytesPtr;
             item.BytesLen = (nuint)bytes.Length;
         }
 
         Marshal.StructureToPtr(item, arrayPtr, false);
 
-        return new NativeHostResult
+        var result = new NativeHostResult
         {
             StackPtr = arrayPtr,
             StackLen = 1,
             ErrorPtr = IntPtr.Zero,
             ErrorLen = 0,
         };
+        Marshal.StructureToPtr(result, output, false);
+    }
+
+    private static bool TryWriteCachedSingle(IntPtr output, uint kind, long integerValue)
+    {
+        var stackPtr = kind switch
+        {
+            0 when integerValue == 0 => s_cachedIntZeroStackPtr,
+            2 when integerValue == 0 => s_cachedNullStackPtr,
+            3 when integerValue == 1 => s_cachedBoolTrueStackPtr,
+            3 when integerValue == 0 => s_cachedBoolFalseStackPtr,
+            _ => IntPtr.Zero
+        };
+
+        if (stackPtr == IntPtr.Zero)
+            return false;
+
+        var result = new NativeHostResult
+        {
+            StackPtr = stackPtr,
+            StackLen = 1,
+            ErrorPtr = IntPtr.Zero,
+            ErrorLen = 0,
+        };
+        Marshal.StructureToPtr(result, output, false);
+        return true;
+    }
+
+    private static IntPtr CreateCachedSingleStackItem(uint kind, long integerValue)
+    {
+        var itemSize = Marshal.SizeOf<NativeStackItem>();
+        var stackPtr = Marshal.AllocHGlobal(itemSize);
+        var item = new NativeStackItem
+        {
+            Kind = kind,
+            IntegerValue = integerValue,
+            BytesPtr = IntPtr.Zero,
+            BytesLen = 0,
+        };
+        Marshal.StructureToPtr(item, stackPtr, false);
+        return stackPtr;
     }
 
     /// <summary>
     /// Writes an empty result to the output NativeHostResult.
     /// </summary>
-    private static NativeHostResult CreateEmptyOutput()
+    private static void WriteOutputEmpty(IntPtr output)
     {
-        return new NativeHostResult
+        if (output == IntPtr.Zero) return;
+        var result = new NativeHostResult
         {
             StackPtr = IntPtr.Zero,
             StackLen = 0,
             ErrorPtr = IntPtr.Zero,
             ErrorLen = 0,
         };
+        Marshal.StructureToPtr(result, output, false);
     }
 
     /// <summary>
     /// Writes an error message to the output NativeHostResult.
     /// </summary>
-    private static NativeHostResult CreateErrorOutput(string message)
+    private static void WriteOutputError(IntPtr output, string message)
     {
+        if (output == IntPtr.Zero) return;
         var errorBytes = Encoding.UTF8.GetBytes(message);
         var errorPtr = Marshal.AllocHGlobal(errorBytes.Length);
         Marshal.Copy(errorBytes, 0, errorPtr, errorBytes.Length);
 
-        return new NativeHostResult
+        var result = new NativeHostResult
         {
             StackPtr = IntPtr.Zero,
             StackLen = 0,
             ErrorPtr = errorPtr,
             ErrorLen = (nuint)errorBytes.Length,
         };
+        Marshal.StructureToPtr(result, output, false);
     }
+
+    /// <summary>
+    /// Tracks allocated NativeStackItem arrays for cleanup.
+    /// </summary>
+    private static readonly List<IntPtr> s_allocatedArrays = new();
+    private static readonly object s_allocLock = new();
+    private static readonly ConcurrentDictionary<IntPtr, GCHandle> s_pinnedByteHandles = new();
+    private static readonly IntPtr s_cachedIntZeroStackPtr = CreateCachedSingleStackItem(0, 0);
+    private static readonly IntPtr s_cachedNullStackPtr = CreateCachedSingleStackItem(2, 0);
+    private static readonly IntPtr s_cachedBoolTrueStackPtr = CreateCachedSingleStackItem(3, 1);
+    private static readonly IntPtr s_cachedBoolFalseStackPtr = CreateCachedSingleStackItem(3, 0);
 
     /// <summary>
     /// Native callback implementation that dispatches to TestHostCallback.
@@ -793,10 +1568,9 @@ public static class RiscVExecutionBridge
         long gasLeft,
         IntPtr inputStackPtr,
         nuint inputStackLen,
-        out NativeHostResult output)
+        IntPtr output)
     {
         var host = (TestHostCallback)GCHandle.FromIntPtr(userData).Target!;
-        var input = ReadInputStack(inputStackPtr, inputStackLen);
         host.CalledApis.Add(api);
 
         switch (api)
@@ -805,131 +1579,127 @@ public static class RiscVExecutionBridge
             case ApiIds.StorageGetContext:
             case ApiIds.StorageGetReadOnlyContext:
                 // Return a dummy context (integer 0)
-                output = CreateSingleOutput(0, 0, null);
+                WriteOutputSingle(output, 0, 0, null);
                 return true;
 
             case ApiIds.StorageAsReadOnly:
                 // Return the same context (no-op)
-                output = CreateSingleOutput(0, 0, null);
+                WriteOutputSingle(output, 0, 0, null);
                 return true;
 
             case ApiIds.StorageGet:
                 // input: [ByteString(key)] -> returns ByteString(value) or null
-                if (input.Length >= 1)
                 {
-                    var key = ReadItemBytes(input[0]);
-                    if (host.Storage.TryGetValue(key, out var value))
+                    var keyItem = ReadInputItem(inputStackPtr, inputStackLen, 0);
+                    if (IsByteStringItem(keyItem) &&
+                        host.TryGetStorageValue(keyItem, out var storedValue))
                     {
-                        output = CreateSingleOutput(1, 0, value);
+                        WriteOutputSingle(output, 1, 0, storedValue);
                     }
                     else
                     {
                         // Key not found — return null
-                        output = CreateSingleOutput(2, 0, null);
+                        WriteOutputSingle(output, 2, 0, null);
                     }
-                }
-                else
-                {
-                    output = CreateSingleOutput(2, 0, null);
                 }
                 return true;
 
             case ApiIds.StoragePut:
                 // input: [context, ByteString(key), ByteString(value)]
-                if (input.Length >= 3)
+                if (TryReadInputBytes(inputStackPtr, inputStackLen, 1, out var key) &&
+                    TryReadInputBytes(inputStackPtr, inputStackLen, 2, out var value))
                 {
-                    var key = ReadItemBytes(input[1]);
-                    var value = ReadItemBytes(input[2]);
-                    host.Storage[key] = value;
+                    host.PutStorageValue(key, value);
                 }
-                else if (input.Length >= 2)
+                else if (TryReadInputBytes(inputStackPtr, inputStackLen, 0, out key) &&
+                         TryReadInputBytes(inputStackPtr, inputStackLen, 1, out value))
                 {
                     // Some contracts pass [key, value] without context
-                    var key = ReadItemBytes(input[0]);
-                    var value = ReadItemBytes(input[1]);
-                    host.Storage[key] = value;
+                    host.PutStorageValue(key, value);
                 }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
 
             case ApiIds.StorageDelete:
                 // input: [context, ByteString(key)]
-                if (input.Length >= 2)
                 {
-                    var key = ReadItemBytes(input[1]);
-                    host.Storage.Remove(key);
+                    var keyItem = ReadInputItem(inputStackPtr, inputStackLen, 1);
+                    if (IsByteStringItem(keyItem))
+                        host.RemoveStorageValue(keyItem);
+                    else
+                    {
+                        keyItem = ReadInputItem(inputStackPtr, inputStackLen, 0);
+                        if (IsByteStringItem(keyItem))
+                            host.RemoveStorageValue(keyItem);
+                    }
                 }
-                else if (input.Length >= 1)
-                {
-                    var key = ReadItemBytes(input[0]);
-                    host.Storage.Remove(key);
-                }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
 
             case ApiIds.StorageFind:
                 // Return an empty iterator handle
-                output = CreateSingleOutput(6, 0, null);
+                WriteOutputSingle(output, 6, 0, null);
                 return true;
 
             // --- Storage.Local syscalls ---
             case ApiIds.StorageLocalGet:
                 // input: [id, ByteString(key)]
-                if (input.Length >= 2)
                 {
-                    var key = ReadItemBytes(input[1]);
-                    if (host.Storage.TryGetValue(key, out var val))
-                        output = CreateSingleOutput(1, 0, val);
+                    var keyItem = ReadInputItem(inputStackPtr, inputStackLen, 1);
+                    if (IsByteStringItem(keyItem) &&
+                        host.TryGetStorageValue(keyItem, out var val))
+                        WriteOutputSingle(output, 1, 0, val);
                     else
-                        output = CreateEmptyOutput();
-                }
-                else
-                {
-                    output = CreateEmptyOutput();
+                        WriteOutputEmpty(output);
                 }
                 return true;
 
             case ApiIds.StorageLocalPut:
                 // input: [id, ByteString(key), ByteString(value)]
-                if (input.Length >= 3)
+                if (TryReadInputBytes(inputStackPtr, inputStackLen, 1, out key) &&
+                    TryReadInputBytes(inputStackPtr, inputStackLen, 2, out value))
                 {
-                    var key = ReadItemBytes(input[1]);
-                    var value = ReadItemBytes(input[2]);
-                    host.Storage[key] = value;
+                    host.PutStorageValue(key, value);
                 }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
 
             case ApiIds.StorageLocalDelete:
                 // input: [id, ByteString(key)]
-                if (input.Length >= 2)
                 {
-                    var key = ReadItemBytes(input[1]);
-                    host.Storage.Remove(key);
+                    var keyItem = ReadInputItem(inputStackPtr, inputStackLen, 1);
+                    if (IsByteStringItem(keyItem))
+                        host.RemoveStorageValue(keyItem);
                 }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
 
             case ApiIds.StorageLocalFind:
                 // Return an empty iterator handle
-                output = CreateSingleOutput(6, 0, null);
+                WriteOutputSingle(output, 6, 0, null);
                 return true;
 
             // --- Runtime syscalls ---
             case ApiIds.RuntimeCheckWitness:
-                output = CreateSingleOutput(3, 1, null);
+                // Always return true in tests
+                WriteOutputSingle(output, 3, 1, null);
                 return true;
 
             case ApiIds.RuntimeLog:
+            {
+                var input = ReadInputStack(inputStackPtr, inputStackLen);
                 if (input.Length >= 1)
                 {
                     var msgBytes = ReadItemBytes(input[0]);
                     host.Logs.Add(Encoding.UTF8.GetString(msgBytes));
                 }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
+            }
 
             case ApiIds.RuntimeNotify:
+            {
+                var input = ReadInputStack(inputStackPtr, inputStackLen);
                 // input can be [scriptHash, eventName, Array(args)] or [eventName, Array(args)]
                 if (input.Length >= 3)
                 {
@@ -972,82 +1742,96 @@ public static class RiscVExecutionBridge
                         Args = args,
                     });
                 }
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
+            }
 
             case ApiIds.RuntimeGetTrigger:
                 // TriggerType.Application = 0x40
-                output = CreateSingleOutput(0, 0x40, null);
+                WriteOutputSingle(output, 0, 0x40, null);
                 return true;
 
             case ApiIds.RuntimeGetNetwork:
-                output = CreateSingleOutput(0, 860833102, null);
+                WriteOutputSingle(output, 0, 860833102, null);
                 return true;
 
             case ApiIds.RuntimeGetAddressVersion:
-                output = CreateSingleOutput(0, 53, null);
+                WriteOutputSingle(output, 0, 53, null);
                 return true;
 
             case ApiIds.RuntimeGetTime:
-                output = CreateSingleOutput(0, 0, null);
+                WriteOutputSingle(output, 0, 0, null);
                 return true;
 
             case ApiIds.RuntimeGasLeft:
-                output = CreateSingleOutput(0, 10_000_000_000_000L, null);
+                WriteOutputSingle(output, 0, 10_000_000_000_000L, null);
                 return true;
 
             case ApiIds.RuntimePlatform:
                 var platBytes = Encoding.UTF8.GetBytes("NEO");
-                output = CreateSingleOutput(1, 0, platBytes);
+                WriteOutputSingle(output, 1, 0, platBytes);
                 return true;
 
             case ApiIds.RuntimeGetExecutingScriptHash:
             case ApiIds.RuntimeGetCallingScriptHash:
             case ApiIds.RuntimeGetEntryScriptHash:
                 // Return 20 zero bytes as a script hash
-                output = CreateSingleOutput(1, 0, new byte[20]);
+                WriteOutputSingle(output, 1, 0, new byte[20]);
                 return true;
 
             // --- Iterator syscalls ---
             case ApiIds.IteratorNext:
-                output = CreateSingleOutput(3, 0, null);
+                // Return false (no more items)
+                WriteOutputSingle(output, 3, 0, null);
                 return true;
 
             case ApiIds.IteratorValue:
-                output = CreateSingleOutput(2, 0, null);
+                WriteOutputSingle(output, 2, 0, null);
                 return true;
 
             default:
                 // Unknown syscall — return empty to avoid fault
-                output = CreateEmptyOutput();
+                WriteOutputEmpty(output);
                 return true;
         }
-
     }
 
     /// <summary>
     /// Free callback for memory allocated by TestHostCallbackImpl.
     /// </summary>
-    private static void TestHostFreeImpl(IntPtr userData, ref NativeHostResult result)
+    private static void TestHostFreeImpl(IntPtr userData, IntPtr result)
     {
+        if (result == IntPtr.Zero) return;
+
+        var nativeResult = Marshal.PtrToStructure<NativeHostResult>(result);
+
         // Free the stack items and their byte arrays
-        if (result.StackPtr != IntPtr.Zero && result.StackLen > 0)
+        if (nativeResult.StackPtr != IntPtr.Zero && nativeResult.StackLen > 0)
         {
             var itemSize = Marshal.SizeOf<NativeStackItem>();
-            for (var i = 0; i < (int)result.StackLen; i++)
+            for (var i = 0; i < (int)nativeResult.StackLen; i++)
             {
-                var itemPtr = IntPtr.Add(result.StackPtr, i * itemSize);
+                var itemPtr = IntPtr.Add(nativeResult.StackPtr, i * itemSize);
                 var item = Marshal.PtrToStructure<NativeStackItem>(itemPtr);
                 if (item.BytesPtr != IntPtr.Zero)
-                    Marshal.FreeHGlobal(item.BytesPtr);
+                {
+                    if (s_pinnedByteHandles.TryRemove(item.BytesPtr, out var bytesHandle))
+                        bytesHandle.Free();
+                    else
+                        Marshal.FreeHGlobal(item.BytesPtr);
+                }
             }
-            Marshal.FreeHGlobal(result.StackPtr);
+            if (nativeResult.StackPtr != s_cachedIntZeroStackPtr &&
+                nativeResult.StackPtr != s_cachedNullStackPtr &&
+                nativeResult.StackPtr != s_cachedBoolTrueStackPtr &&
+                nativeResult.StackPtr != s_cachedBoolFalseStackPtr)
+            {
+                Marshal.FreeHGlobal(nativeResult.StackPtr);
+            }
         }
 
-        if (result.ErrorPtr != IntPtr.Zero)
-            Marshal.FreeHGlobal(result.ErrorPtr);
-
-        result = default;
+        if (nativeResult.ErrorPtr != IntPtr.Zero)
+            Marshal.FreeHGlobal(nativeResult.ErrorPtr);
     }
 
     /// <summary>
@@ -1145,15 +1929,11 @@ public static class RiscVExecutionBridge
 
     private static string? FindNativeLibrary()
     {
-        var candidates = new[]
-        {
-            // Next to test binary (copied by MSBuild Content item).
-            Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so"),
-            // Direct path from the repo root.
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "target", "release", "libneo_riscv_host.so"),
-        };
+        var envPath = Environment.GetEnvironmentVariable("NEO_RISCV_HOST_LIB");
+        if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
+            return envPath;
 
-        foreach (var path in candidates)
+        foreach (var path in EnumerateNativeLibraryCandidates())
         {
             var full = Path.GetFullPath(path);
             if (File.Exists(full))
@@ -1161,5 +1941,49 @@ public static class RiscVExecutionBridge
         }
 
         return null;
+    }
+
+    private static IEnumerable<string> EnumerateNativeLibraryCandidates()
+    {
+        yield return Path.Combine(AppContext.BaseDirectory, "libneo_riscv_host.so");
+        yield return Path.Combine(AppContext.BaseDirectory, "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so");
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in EnumerateNativeLibrarySearchRoots())
+        {
+            foreach (var candidate in new[]
+            {
+                Path.Combine(root, "target", "release", "libneo_riscv_host.so"),
+                Path.Combine(root, "target", "debug", "libneo_riscv_host.so"),
+                Path.Combine(root, "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
+                Path.Combine(root, "neo-riscv-vm", "target", "release", "libneo_riscv_host.so"),
+                Path.Combine(root, "neo-riscv-vm", "target", "debug", "libneo_riscv_host.so"),
+                Path.Combine(root, "neo-riscv-vm", "dist", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
+                Path.Combine(root, "neo-riscv-core", "tests", "Neo.UnitTests", "Plugins", "Neo.Riscv.Adapter", "libneo_riscv_host.so"),
+            })
+            {
+                var full = Path.GetFullPath(candidate);
+                if (seen.Add(full))
+                    yield return full;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateNativeLibrarySearchRoots()
+    {
+        foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        {
+            var directory = Path.GetFullPath(start);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                yield return directory;
+
+                var parent = Path.GetDirectoryName(directory);
+                if (string.IsNullOrEmpty(parent) || parent == directory)
+                    break;
+
+                directory = parent;
+            }
+        }
     }
 }

@@ -143,7 +143,7 @@ namespace Neo.SmartContract.Testing
 
             DataCache clonedSnapshot = _engine.Storage.Snapshot.CloneCache();
 
-            using (var engine = new TestingApplicationEngine(_engine, TriggerType.OnPersist, persist, clonedSnapshot, persist))
+            using (var engine = _engine.CreateExecutionEngine(TriggerType.OnPersist, persist, clonedSnapshot, persist, _engine.Fee))
             {
                 engine.LoadScript(onPersistScript);
                 if (engine.Execute() != VMState.HALT)
@@ -152,7 +152,7 @@ namespace Neo.SmartContract.Testing
 
             // Invoke PostPersist
 
-            using (var engine = new TestingApplicationEngine(_engine, TriggerType.PostPersist, persist, clonedSnapshot, persist))
+            using (var engine = _engine.CreateExecutionEngine(TriggerType.PostPersist, persist, clonedSnapshot, persist, _engine.Fee))
             {
                 engine.LoadScript(postPersistScript);
                 if (engine.Execute() != VMState.HALT)

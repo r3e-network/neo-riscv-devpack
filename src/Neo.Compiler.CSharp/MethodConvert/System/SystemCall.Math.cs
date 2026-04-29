@@ -213,11 +213,37 @@ internal partial class MethodConvert
     /// <param name="instanceExpression">The instance expression (if any)</param>
     /// <param name="arguments">The method arguments</param>
     /// <remarks>
-    /// Algorithm: Delegates to BigInteger DivRem for consistent implementation across integer types
+    /// Algorithm: Normalizes two's-complement UInt64 arguments into the unsigned BigInteger domain,
+    /// then delegates to the BigInteger DivRem sequence.
     /// </remarks>
     private static void HandleMathULongDivRem(MethodConvert methodConvert, SemanticModel model, IMethodSymbol symbol, ExpressionSyntax? instanceExpression, IReadOnlyList<SyntaxNode>? arguments)
     {
-        HandleMathBigIntegerDivRem(methodConvert, model, symbol, instanceExpression, arguments);
+        if (instanceExpression is not null)
+            methodConvert.ConvertExpression(model, instanceExpression);
+        if (arguments is not null)
+            methodConvert.PrepareArgumentsForMethod(model, symbol, arguments);
+
+        methodConvert.NormalizeTopUInt64();
+        methodConvert.Swap();
+        methodConvert.NormalizeTopUInt64();
+        methodConvert.Swap();
+        methodConvert.Dup();
+        methodConvert.Pick(2);
+        methodConvert.Div();
+        methodConvert.Reverse3();
+        methodConvert.Mod();
+        methodConvert.Pack(2);
+    }
+
+    private void NormalizeTopUInt64()
+    {
+        var nonNegativeTarget = new JumpTarget();
+        Dup();
+        Push0();
+        JumpIfGreaterOrEqual(nonNegativeTarget);
+        Push(BigInteger.One << 64);
+        Add();
+        nonNegativeTarget.Instruction = Nop();
     }
 
     /// <summary>

@@ -15,7 +15,11 @@
 			<Aliases>scfx</Aliases>
 		</ProjectReference>
 		<ProjectReference Include="..\..\src\Neo.SmartContract.Testing\Neo.SmartContract.Testing.csproj" />
-		<ProjectReference Include="..\..\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" />
+		<!-- Canonical adapter lives in the neo-riscv-vm sibling repo. Prefer monorepo
+		     layout (../../../neo-riscv-vm) where vm lives beside this devpack under a
+		     shared parent; fall back to a flatter sibling (../../../../neo-riscv-vm). -->
+		<ProjectReference Include="..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
+		<ProjectReference Include="..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\compat\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
 	</ItemGroup>
 
 	<!-- RISC-V native library for direct P/Invoke testing -->

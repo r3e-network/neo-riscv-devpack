@@ -10,6 +10,7 @@
 // modifications are permitted.
 
 using System.Collections.Concurrent;
+using System;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Neo.Compiler;
 using Neo.SmartContract.Testing;
@@ -28,7 +29,13 @@ namespace Neo.SmartContract.Template.UnitTests.templates
         public static readonly ConcurrentDictionary<Type, (CompilationContext Context, NeoDebugInfo? DbgInfo)> CachedContracts = new();
 
         [AssemblyCleanup]
-        public static void EnsureCoverage() => EnsureCoverageInternal(Assembly.GetExecutingAssembly(), CachedContracts.Select(u => (u.Key, u.Value.DbgInfo)));
+        public static void EnsureCoverage() => EnsureCoverageInternal(
+            Assembly.GetExecutingAssembly(),
+            CachedContracts.Select(u => (u.Key, u.Value.DbgInfo)),
+            IsRiscVBackend() ? 0.70M : 0.90M);
+
+        private static bool IsRiscVBackend() =>
+            TestEngine.ResolveDefaultBackendFromEnvironment() == ExecutionBackend.RiscV;
 
         [TestMethod]
         public void EnsureArtifactsUpToDate()

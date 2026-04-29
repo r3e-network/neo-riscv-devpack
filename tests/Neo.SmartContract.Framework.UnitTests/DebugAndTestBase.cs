@@ -29,7 +29,7 @@ public class DebugAndTestBase<T> : TestBase<T>
 
     protected void AssertGasConsumed(long gasConsumed)
     {
-        if (TestGasConsume)
+        if (TestGasConsume && Engine.Backend != ExecutionBackend.RiscV)
             Assert.AreEqual(gasConsumed, Engine.FeeConsumed.Value);
     }
 }

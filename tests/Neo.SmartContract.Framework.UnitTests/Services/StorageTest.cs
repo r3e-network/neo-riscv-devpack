@@ -147,7 +147,10 @@ namespace Neo.SmartContract.Framework.UnitTests.Services
 
             // Put
             var exception = Assert.ThrowsException<TestException>(() => Contract.TestPutReadOnly(key, value));
-            Assert.IsInstanceOfType<TargetInvocationException>(exception.InnerException);
+            if (Engine.Backend == ExecutionBackend.RiscV)
+                Assert.IsInstanceOfType<ArgumentException>(exception.InnerException);
+            else
+                Assert.IsInstanceOfType<TargetInvocationException>(exception.InnerException);
         }
 
         [TestMethod]

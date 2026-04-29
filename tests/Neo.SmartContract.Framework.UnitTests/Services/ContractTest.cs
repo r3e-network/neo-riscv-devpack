@@ -48,7 +48,10 @@ namespace Neo.SmartContract.Framework.UnitTests.Services
             // Check again for failures
 
             var exception = Assert.ThrowsException<TestException>(() => created.GetCallFlags());
-            Assert.IsInstanceOfType<TargetInvocationException>(exception.InnerException);
+            if (Engine.Backend == ExecutionBackend.RiscV)
+                Assert.IsInstanceOfType<InvalidOperationException>(exception.InnerException);
+            else
+                Assert.IsInstanceOfType<TargetInvocationException>(exception.InnerException);
             Engine.Storage.Rollback();
         }
 
