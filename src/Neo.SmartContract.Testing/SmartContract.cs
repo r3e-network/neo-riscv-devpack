@@ -114,7 +114,7 @@ namespace Neo.SmartContract.Testing
             var items = new StackItem[args.Length];
             for (var index = 0; index < args.Length; index++)
                 items[index] = ConvertArgToStackItem(engine, args[index]);
-            return new Neo.VM.Types.Array(engine.ReferenceCounter, items);
+            return new Neo.VM.Types.Array(items);
         }
 
         private static StackItem ConvertArgToStackItem(ApplicationEngine engine, object? arg)

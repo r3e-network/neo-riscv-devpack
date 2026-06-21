@@ -32,14 +32,17 @@
       <ProjectReference Include="..\..\..\neo-riscv-core\src\Neo\Neo.csproj" Condition="Exists('..\..\..\neo-riscv-core\src\Neo\Neo.csproj')" />
       <ProjectReference Include="..\..\neo-riscv-core\src\Neo\Neo.csproj" Condition="!Exists('..\..\..\neo-riscv-core\src\Neo\Neo.csproj') AND Exists('..\..\neo-riscv-core\src\Neo\Neo.csproj')" />
       <ProjectReference Include="..\..\..\..\neo-riscv-core\src\Neo\Neo.csproj" Condition="!Exists('..\..\..\neo-riscv-core\src\Neo\Neo.csproj') AND !Exists('..\..\neo-riscv-core\src\Neo\Neo.csproj') AND Exists('..\..\..\..\neo-riscv-core\src\Neo\Neo.csproj')" />
-      <PackageReference Include="Neo" Version="3.9.1" Condition="!Exists('..\..\..\neo-riscv-core\src\Neo\Neo.csproj') AND !Exists('..\..\neo-riscv-core\src\Neo\Neo.csproj') AND !Exists('..\..\..\..\neo-riscv-core\src\Neo\Neo.csproj')" />
+      <PackageReference Include="Neo" Version="3.10.0" Condition="!Exists('..\..\..\neo-riscv-core\src\Neo\Neo.csproj') AND !Exists('..\..\neo-riscv-core\src\Neo\Neo.csproj') AND !Exists('..\..\..\..\neo-riscv-core\src\Neo\Neo.csproj')" />
     </ItemGroup>
 
     <ItemGroup>
       <!-- Canonical adapter lives in the neo-riscv-vm sibling repo. Prefer the monorepo
            layout (../../../neo-riscv-vm) where this devpack lives beside the vm sibling
            under a shared parent; fall back to a stand-alone sibling (../../../../neo-riscv-vm)
-           for flatter checkouts. -->
+           for flatter checkouts. NOTE: unlike neo-riscv-core/node, the devpack TestEngine
+           unconditionally references adapter types (IRiscvVmBridge), so this project
+           genuinely requires the adapter to be source-buildable — a physical sibling layout
+           (core+vm under one real parent) is needed to compile. -->
       <ProjectReference Include="..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
       <ProjectReference Include="..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj" Condition="!Exists('..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj') AND Exists('..\..\..\..\neo-riscv-vm\dotnet\Neo.Riscv.Adapter\Neo.Riscv.Adapter.csproj')" />
     </ItemGroup>
