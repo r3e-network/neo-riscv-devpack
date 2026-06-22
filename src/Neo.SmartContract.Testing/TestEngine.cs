@@ -38,6 +38,34 @@ using System.Text;
 
 namespace Neo.SmartContract.Testing
 {
+    /// <summary>
+    /// The devpack test harness that orchestrates contract execution,
+    /// coverage capture, custom mocks, and native-contract fixtures.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Role:</b> <see cref="TestEngine"/> is the central object of the
+    /// <c>Neo.SmartContract.Testing</c> framework. It wraps an
+    /// <see cref="ApplicationEngine"/> (either the pure-NeoVM engine or the
+    /// RISC-V adapter when available) and layers on the testing conveniences
+    /// that contract unit tests rely on:</para>
+    /// <list type="bullet">
+    /// <item><description><see cref="Coverage"/> — per-contract line/method
+    /// coverage tracking for NeoVM contracts.</description></item>
+    /// <item><description>Custom mocks — substitute a .NET implementation for a
+    /// contract method call (see <c>TryGetCustomMock</c>).</description></item>
+    /// <item><description>Script-hash fixtures (<see cref="OnGetCallingScriptHash"/>,
+    /// <see cref="OnGetEntryScriptHash"/>) — override the calling/entry hash
+    /// returned to a contract under test.</description></item>
+    /// <item><description>Native-contract fixtures (<c>NativeContracts</c>) —
+    /// pre-seeded storage for native contracts.</description></item>
+    /// <item><description>Fee watchers (<c>_feeWatchers</c>) — assert on gas
+    /// consumed by a call.</description></item>
+    /// </list>
+    /// <para><b>RISC-V integration:</b> When the native
+    /// <c>Neo.Riscv.Adapter</c> is referenced, the engine routes execution
+    /// through <see cref="RiscvApplicationEngineTestingHooks"/> so that mocks
+    /// and fixtures work identically for RISC-V contracts.</para>
+    /// </remarks>
     public class TestEngine
     {
         public delegate UInt160? OnGetScriptHash(UInt160? current, UInt160? expected);

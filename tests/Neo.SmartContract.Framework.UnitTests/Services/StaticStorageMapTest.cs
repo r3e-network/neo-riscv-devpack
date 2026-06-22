@@ -44,8 +44,22 @@ namespace Neo.SmartContract.Framework.UnitTests.Services
             Contract.Teststoragemap_Putbyteprefix(255);
             Assert.AreEqual(123, Contract.Teststoragemap_Getbyteprefix(255));
 
-            Contract.Teststoragemap_Putbyteprefix(-128);
-            Assert.AreEqual(123, Contract.Teststoragemap_Getbyteprefix(-128));
+            if (Engine.Backend == ExecutionBackend.RiscV)
+            {
+                // neo-vm-rs executes pre-Gorgon SETITEM semantics (the documented, deferred
+                // RISC-V Gorgon opcode gap, neo-vm #543): a -128 byte prefix is accepted and
+                // stored as 0x80 instead of throwing. HF_Gorgon is inactive on this fork's
+                // chains, so the pre-Gorgon result is consensus-correct here.
+                Contract.Teststoragemap_Putbyteprefix(-128);
+                Assert.AreEqual(123, Contract.Teststoragemap_Getbyteprefix(-128));
+            }
+            else
+            {
+                // Neo.VM 3.10.0 (post-Gorgon) throws on the BigInteger->byte conversion
+                // for a negative byte prefix.
+                var negativePrefixException = Assert.ThrowsException<TestException>(() => Contract.Teststoragemap_Putbyteprefix(-128));
+                Assert.IsInstanceOfType<OverflowException>(negativePrefixException.InnerException);
+            }
 
             Contract.Teststoragemap_Putbyteprefix(127);
             Assert.AreEqual(123, Contract.Teststoragemap_Getbyteprefix(127));
